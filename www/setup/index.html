@@ -14,26 +14,18 @@
   <header class="setup-header"><a href="/" aria-label="Field Theory home"><img src="/images/fieldtheory-logo-black.png" alt="Field Theory"></a><a href="https://onboard-assisted-setup-afar1.vercel.app">Onboard</a></header>
   <main>
     <section class="intro">
-      <h1>Set up Field Theory.</h1>
-      <p>Your assistant checks what already works and helps with the rest. Get ready to record a call and work together.</p>
+      <h1>Set up your Mac<br>with Field Theory.</h1>
+      <p>Paste this prompt into ChatGPT or Claude. Your assistant will check what’s already working and help you finish setup.</p>
     </section>
     <section class="setup" aria-label="Set up Field Theory">
-      <fieldset class="host-picker"><legend>Choose your assistant</legend><label><input type="radio" name="host" value="chatgpt" checked><span>ChatGPT / Codex</span></label><label><input type="radio" name="host" value="claude"><span>Claude</span></label></fieldset>
-      <details class="connection"><summary>Connect the Field Theory plugin</summary><div id="plugin-install"></div></details>
-      <p id="plugin-instructions" class="muted"></p>
-      <div class="handoff">
-        <h2>Then continue in your assistant.</h2>
-        <p>Paste the setup prompt into a new conversation. Follow the instructions there, including sign-in and Mac permissions.</p>
-        <button class="primary" id="copy-prompt" type="button">Copy setup prompt</button>
-        <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+      <button class="primary" id="copy-prompt" type="button">Copy setup prompt</button>
+      <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+      <details class="help"><summary>Need help getting started?</summary>
+        <p>Use the desktop app: <a href="https://chatgpt.com/download/">ChatGPT</a> or <a href="https://claude.com/download">Claude</a>. The prompt helps you find a session with local tools and computer use. Availability depends on your account.</p>
+        <p><a href="https://github.com/afar1/field-releases/releases/download/v0.3.78-onboarding.1/Field.Theory-0.3.78-onboarding.1-arm64.dmg">Download Field Theory for Mac</a>, or <a href="fieldtheory://onboard">open it</a> if installed. This preview requires Apple Silicon and macOS 14 or later.</p>
+        <p>The <a href="https://github.com/afar1/field-releases/releases/download/v0.3.78-onboarding.1/field-theory-plugin.zip">preview plugin</a> works in supported local Codex or Claude sessions. It is not yet in the official directories. <a href="/setup/plugin-readme.txt">Installation instructions</a>.</p>
+        <p>Sign in and enter verification codes inside Field Theory. Approve Mac permissions when asked. Builder tools are optional once the essentials work.</p>
         <details class="prompt-details"><summary>Read the prompt</summary><label class="sr-only" for="setup-prompt">Setup prompt</label><textarea id="setup-prompt" readonly spellcheck="false"></textarea></details>
-      </div>
-      <div class="downloads"><a id="app-download" href="https://github.com/afar1/field-releases/releases/download/v0.3.78-onboarding.1/Field.Theory-0.3.78-onboarding.1-arm64.dmg">Download Field Theory for Mac</a><a href="fieldtheory://onboard">Open Field Theory</a><a id="assistant-download" href="https://chatgpt.com/download/" target="_blank" rel="noopener">Get ChatGPT</a></div>
-      <details class="requirements"><summary>What you’ll need</summary>
-        <p id="host-note"></p>
-        <p>Field Theory preview 0.3.78-onboarding.1 requires Apple Silicon and macOS 14 or later. Existing accounts and recording preferences are preserved.</p>
-        <p>Sign in inside Field Theory; enter email verification codes there, never in the conversation. Your assistant guides the permissions, then tests recording and computer control with you.</p>
-        <p>Builder tools are optional, after the essentials work. This website cannot inspect your Mac; the installed app and your assistant perform those checks.</p>
       </details>
     </section>
   </main>

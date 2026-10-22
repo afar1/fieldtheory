@@ -1,32 +1,17 @@
 (function () {
   const prompt = document.getElementById('setup-prompt');
   const status = document.getElementById('copy-status');
-  function render(host) {
-    prompt.value = window.setupPrompt(host);
-    status.textContent = '';
-    document.getElementById('host-note').textContent = host === 'claude'
-      ? 'Use Claude Desktop with a supported local session. Computer use currently requires Pro or Max.'
-      : 'Use ChatGPT Desktop in Work or Codex. Computer use must be available for your account.';
-    document.getElementById('assistant-download').textContent = host === 'claude' ? 'Get Claude' : 'Get ChatGPT';
-    document.getElementById('assistant-download').href = host === 'claude' ? 'https://claude.com/download' : 'https://chatgpt.com/download/';
-    document.getElementById('plugin-instructions').textContent = host === 'claude'
-      ? 'Preview plugin for local Cowork or Code sessions. Not yet in the official directory.'
-      : 'Preview plugin for Codex. ChatGPT can guide setup; its official plugin listing is not available yet.';
-    document.getElementById('plugin-install').innerHTML = '<p><a href="https://github.com/afar1/field-releases/releases/download/v0.3.78-onboarding.1/field-theory-plugin.zip" download>Download the preview plugin</a>. It can reuse Codex’s bundled Node.js runtime. Otherwise it needs Node.js 18 or later; <a href="https://nodejs.org/en/download">install Node.js LTS</a> if needed.</p>' + (host === 'claude'
-      ? '<p>In Claude Desktop, open Customize → Plugins → Add → Upload plugin and choose the ZIP. Choose Code → This computer and approve tool access when Claude asks. Ordinary Chat cannot use these local tools. For Claude Code, unzip it and run <code>./install.sh --claude</code> from the extracted folder and follow the printed command.</p>'
-      : '<p>For Codex Desktop, unzip it, open Terminal in the extracted folder and run <code>./install.sh</code>. Restart Codex, enable Field Theory under Personal plugins, and start a new chat. This does not install it into the ChatGPT directory; for ChatGPT, use guided setup until its distribution is approved.</p>') + '<p>Already connected? Continue below. <a href="/setup/plugin-readme.txt">Full installation instructions</a></p>';
-  }
-  document.querySelectorAll('input[name="host"]').forEach(input => input.addEventListener('change', () => render(input.value)));
+  prompt.value = window.setupPrompt();
   document.getElementById('copy-prompt').addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(prompt.value);
-      status.textContent = 'Copied. Paste it into a new conversation with your assistant.';
+      status.textContent = 'Copied. Paste it into ChatGPT or Claude.';
     } catch {
+      document.querySelector('.help').open = true;
       prompt.closest('details').open = true;
       prompt.focus();
       prompt.select();
       status.textContent = 'Select and copy the prompt below, then paste it into your assistant.';
     }
   });
-  render('chatgpt');
 })();
