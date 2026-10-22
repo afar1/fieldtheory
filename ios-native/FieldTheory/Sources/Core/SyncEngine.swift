@@ -388,6 +388,7 @@ final class SyncEngine {
         self.userId = normalizedUserID
         self.userEmail = email?.lowercased()
         sessionFence.activate(userId: normalizedUserID)
+        if foreground { river.start(client: client, userID: normalizedUserID) }
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -416,9 +417,11 @@ final class SyncEngine {
     func setForeground(_ active: Bool) {
         foreground = active
         if active {
+            if let userId { river.start(client: client, userID: userId) }
             startDeliveryWatch()
             scheduleDebounced(after: 0.3)
         } else {
+            river.stop()
             deliveryWatchToken = nil
             deliveryWatchTask?.cancel()
             deliveryWatchTask = nil
@@ -499,6 +502,7 @@ final class SyncEngine {
     /// was already in flight to observe cancellation and finish. Callers can
     /// safely wipe or replace the local store once this returns.
     func stopAndWait() async {
+        await river.stopAndWait()
         setForeground(false)
         transcripts.clearDelivery()
         connectivityGeneration = UUID()

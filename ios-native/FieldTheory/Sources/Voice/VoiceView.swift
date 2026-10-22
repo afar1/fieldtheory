@@ -37,6 +37,8 @@ struct VoiceView: View {
     @State private var recordingToDiscard: String?
     @State private var audioToDiscard: PendingAudioSession?
     @State private var pendingAudioDetails: String?
+    @State private var showRiverShare = false
+    @State private var sharingItem: TranscriptItem?
     @State private var selectionMode = false
     @State private var selectedIds: Set<String> = []
     @State private var editingItem: TranscriptItem?
@@ -162,6 +164,15 @@ struct VoiceView: View {
             }
             .onChange(of: model.workspaceGeneration) { _, _ in completedTranscriptID = nil }
         return observedContent
+            .sheet(isPresented: $showRiverShare) {
+                RiverShareSheet(text: sharingItem?.text ?? "", sourceID: sharingItem?.id ?? "") {
+
+                    showRiverShare = false
+                    toast.show("Shared to River", symbol: "water.waves")
+                }
+                .presentationDetents([.height(540), .large])
+                .presentationDragIndicator(.visible)
+            }
             .confirmationDialog("Send feedback to support?", isPresented: Binding(
                 get: { feedbackRequest != nil },
                 set: { if !$0 { feedbackRequest = nil } }
@@ -425,6 +436,10 @@ struct VoiceView: View {
             label = "Waiting to transcribe"
         } else if case .notDownloaded = model.recorder.engineState {
             label = "Waiting to transcribe"
+        } else if case .ready = model.recorder.engineState {
+            // Inference can fail while the prepared engine remains ready.
+            // Saved audio is waiting for retry, not still loading a model.
+            label = "Waiting to transcribe"
         } else {
             label = "Preparing transcription…"
         }
@@ -482,6 +497,22 @@ struct VoiceView: View {
                 unstackItems([item])
             }
         )
+        }
+        .overlay(alignment: .topTrailing) {
+            if !selectionMode {
+                Button {
+                    sharingItem = item
+                    showRiverShare = true
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Theme.textMuted(colorScheme).opacity(0.6))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Share transcript")
+                .padding(4)
+            }
         }
         .overlay(alignment: .topLeading) {
             if selectionMode {
@@ -806,18 +837,12 @@ struct VoiceView: View {
             selectionAction("Back", systemImage: "chevron.left", enabled: true) {
                 exitSelection()
             }
-            selectionAction("Stack", systemImage: "square.stack.3d.up", enabled: selectedIds.count >= 2) {
-                stackSelected()
-            }
+            selectionAction("Stack", systemImage: "square.stack.3d.up", enabled: selectedIds.count >= 2) { stackSelected() }
             selectionAction("Unstack", systemImage: "square.stack.3d.down.right", enabled: hasSelectedStack) {
                 unstackSelected()
             }
             selectionAction("Edit", systemImage: "pencil", enabled: selectedIds.count == 1) {
                 editSelected()
-            }
-            selectionAction("Agent", systemImage: "bubble.left.and.bubble.right", enabled: !selectedIds.isEmpty && !model.isReviewerDemoStorage) {
-                model.conversations.draftFromVoice = selectedItems.map(\.text).joined(separator: "\n\n")
-                exitSelection()
             }
             selectionAction("Delete", systemImage: "trash", enabled: !selectedIds.isEmpty, destructive: true) {
                 deleteSelected()
@@ -1303,127 +1328,6 @@ struct StackCard: View {
         }
     }
 
-    @State private var showingDelivery = false
-    @State private var showingDeliveryError = false
-
-    private var deliveryError: String? {
-        if actionLabel != "Complete", ["failed", "uncertain", "retry"].contains(item.currentAgentStatus ?? "") {
-            return item.wasSentToAgent
-                ? "The agent task encountered an error. Open Remote to inspect the task and retry there."
-                : "Sending to the agent encountered an error. Open Remote to inspect delivery. Your transcript remains saved."
-        }
-        if !item.isCloudSaved, case .error(let message) = model.sync.status { return message }
-        return nil
-    }
-
-    private var deliveryErrorButton: some View {
-        Button { showingDeliveryError = true } label: {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 12)).foregroundStyle(.orange)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Delivery error")
-        .alert("Delivery error", isPresented: $showingDeliveryError) {
-            if !item.isCloudSaved { Button("Retry cloud save", action: onRequestCloudSave) }
-            Button("OK", role: .cancel) {}
-        } message: { Text(deliveryError ?? "Delivery will retry when possible.") }
-    }
-
-    private var hasEarlierSyncedRevision: Bool {
-        (item.acknowledgedUpdatedAtMs ?? 0) > 0
-            && item.acknowledgedUpdatedAtMs != item.updatedAtMs
-    }
-
-    private var actionLabel: String {
-        VoiceDelivery.status(item: item, events: model.transcripts.events(for: item),
-                             receipt: model.transcripts.receipt(for: item), eventsAlreadyOrdered: true)
-    }
-
-    /// The card communicates the user's next-relevant outcome. The delivery sheet
-    /// still exposes the precise transport stage when that detail is useful.
-    private var cardStatusLabel: String {
-        if actionLabel == "Saved on phone", model.sync.status == .syncing { return "Syncing" }
-        switch actionLabel {
-        case "Saved on phone": return "Local"
-        case "Uploaded", "Received by Mac", "Queued in Codex", "Sent to agent": return "Synced"
-        case "Working": return "Working"
-        case "Complete", "Saved as context": return "Done"
-        case "Needs you": return "Needs input"
-        case "Failed": return "Error"
-        case "Cancelled", "Replaced by newer version": return "No longer current"
-        default: return actionLabel
-        }
-    }
-
-    private var cardStatusIsActive: Bool {
-        ["Syncing", "Working"].contains(cardStatusLabel)
-    }
-
-    private var statusForeground: Color {
-        switch cardStatusLabel {
-        case "Send to agent", "Done":
-            return Color(hex: 0x3E5D3B)
-        case "Local":
-            return Color(hex: 0x5F5B52)
-        case "Syncing", "Synced":
-            return Color(hex: 0x2E6B3D)
-        case "Working":
-            return Color(hex: 0x42647A)
-        case "Needs input":
-            return Color(hex: 0x9A622A)
-        case "Error":
-            return Color(hex: 0x963F38)
-        default:
-            return Theme.textMuted(colorScheme)
-        }
-    }
-
-    private var statusIcon: String? {
-        switch cardStatusLabel {
-        case "Send to agent": return "arrow.up"
-        case "Done": return "checkmark"
-        case "Needs input": return "exclamationmark.triangle"
-        case "Error": return "exclamationmark.circle"
-        case "No longer current": return "arrow.triangle.2.circlepath"
-        default: return nil
-        }
-    }
-
-    private var statusIsAction: Bool { actionLabel == "Send to agent" }
-
-    private var syncStateBadge: some View {
-        Button {
-            if actionLabel == "Send to agent" { onRequestCloudSync() }
-            else { showingDelivery = true }
-        } label: {
-            HStack(spacing: 3) {
-                if let statusIcon {
-                    Image(systemName: statusIcon)
-                        .font(.system(size: 9, weight: .semibold))
-                }
-                Text(cardStatusLabel)
-                if cardStatusIsActive { DeliveryEllipsis() }
-            }
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(statusForeground.opacity(statusIsAction ? 1 : 0.95))
-            .padding(.horizontal, statusIsAction ? 8 : 6)
-            .padding(.vertical, statusIsAction ? 3.5 : 2.5)
-            .background(statusForeground.opacity(statusIsAction ? 0.035 : 0.11), in: RoundedRectangle(cornerRadius: statusIsAction ? 7 : 6))
-            .overlay {
-                if statusIsAction {
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(statusForeground.opacity(0.85), lineWidth: 0.75)
-                }
-            }
-        }
-        .buttonStyle(.borderless)
-        .sheet(isPresented: $showingDelivery) { VoiceDeliveryView(item: item, onSend: onRequestCloudSync) }
-        .fixedSize()
-        .accessibilityLabel(cardStatusLabel)
-        .accessibilityValue(item.actionPolicy)
-        .accessibilityHint(actionLabel == "Send to agent" ? "Shows Send to agent option" : "Shows delivery timestamps and Mac observations")
-    }
-
     private var expansionButton: some View {
         Button(action: onToggleExpand) {
             // Retain the previous text-plus-chevron hit area, even though only
@@ -1470,19 +1374,15 @@ struct StackCard: View {
                 .font(.system(size: 12, weight: copied ? .semibold : .regular))
                 .foregroundStyle(copied ? Theme.link : Theme.textMuted(colorScheme).opacity(0.8))
 
-            syncStateBadge
+            Text("Local")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.textMuted(colorScheme))
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Theme.textMuted(colorScheme).opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
 
             Spacer()
 
-            HStack(spacing: 8) {
-                if deliveryError != nil { deliveryErrorButton }
-                if !selectionMode {
-                    ChatGPTRemoteButton(onWillOpen: onOpenRemote)
-                    .labelStyle(.iconOnly)
-                        .buttonStyle(.plain)
-                }
-            }
-            .fixedSize()
+
         }
     }
 }

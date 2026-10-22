@@ -309,6 +309,46 @@ final class RecorderControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testForegroundResumeRecoversQueuedAudioAfterLocalPreparationFailure() async throws {
+        struct PreparationInterrupted: Error {}
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ft-prepare-recovery-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixture = root.appendingPathComponent("fixture.wav")
+        try Data("audio".utf8).write(to: fixture)
+        let engine = RecorderTestSpeechEngine(state: .preparing)
+        engine.preparation = {
+            engine.state = .failed("interrupted local preparation")
+            engine.onStateChange?()
+            throw PreparationInterrupted()
+        }
+        let recorder = RecorderController(
+            pendingDirectory: root.appendingPathComponent("pending"), speechEngine: engine)
+        var delivered: [String] = []
+        recorder.onTranscript = { delivered.append($0); return true }
+        try recorder.enqueueAudioFixtureForBenchmark(fixture)
+        recorder.setWorkEnabled(true)
+        let failed = await waitForRecorderCondition { recorder.lastError != nil }
+        XCTAssertTrue(failed)
+        XCTAssertEqual(recorder.pendingSessionCount, 1)
+        XCTAssertTrue(delivered.isEmpty)
+
+        // Repeated state notifications must not turn one failure into a loop.
+        engine.onStateChange?()
+        await Task.yield()
+        XCTAssertEqual(engine.prepareCalls, 1)
+
+        engine.preparation = nil
+        await recorder.resumePendingWork()
+        let recovered = await waitForRecorderCondition { recorder.pendingSessionCount == 0 }
+        XCTAssertTrue(recovered)
+        XCTAssertEqual(delivered, ["fixture transcript"])
+        XCTAssertNil(recorder.lastError)
+        XCTAssertEqual(engine.downloadCalls, 0)
+    }
+
+    @MainActor
     func testSignedOutRecorderDoesNotPrepareCachedEngine() async {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("ft-engine-signed-out-\(UUID().uuidString)")

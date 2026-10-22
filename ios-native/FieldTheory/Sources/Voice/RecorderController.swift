@@ -348,13 +348,15 @@ final class RecorderController {
         } catch { return false }
     }
 
-    private func requestPreparationIfNeeded() {
+    private func requestPreparationIfNeeded(retryFailed: Bool = false) {
         guard workEnabled else { return }
         guard enginePreparationTask == nil else { return }
         switch speechEngine.state {
         case .checking, .preparing:
             break
-        case .notDownloaded, .downloading, .ready, .failed:
+        case .failed:
+            guard retryFailed else { return }
+        case .notDownloaded, .downloading, .ready:
             return
         }
 
@@ -1091,7 +1093,10 @@ final class RecorderController {
 
     func resumePendingWork() async {
         refreshPendingAudioStatus()
-        requestPreparationIfNeeded()
+        // A foreground resume may retry one interrupted local preparation.
+        // State callbacks never retry failures, avoiding a preparation loop.
+        // prepare() only uses local assets; downloading remains explicit.
+        requestPreparationIfNeeded(retryFailed: pendingSessionCount > 0)
         await drainPendingQueue()
     }
 

@@ -11,6 +11,9 @@ struct RiverView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var handledOpenDirective = false
     @State private var showSafetyPolicy = false
+    @State private var search = ""
+    @State private var sharedItem: RiverItem?
+    @State private var copiedID: String?
 
     var body: some View {
         GeometryReader { geometry in
@@ -61,6 +64,7 @@ struct RiverView: View {
                 }
             }
             .navigationTitle("River")
+            .searchable(text: $search)
             .toolbar { settingsToolbar }
         }
         .fullScreenCover(item: $openedItem) { item in
@@ -121,27 +125,63 @@ struct RiverView: View {
         }
     }
 
+    private var filteredItems: [RiverItem] {
+        model.river.items.filter { search.isEmpty || $0.content.localizedCaseInsensitiveContains(search) || $0.authorLabel.localizedCaseInsensitiveContains(search) }
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        if Calendar.current.isDateInToday(date) { return "TODAY" }
+        if Calendar.current.isDateInYesterday(date) { return "YESTERDAY" }
+        return date.formatted(.dateTime.month(.abbreviated).day()).uppercased()
+    }
+
     private var compactList: some View {
         ScrollView {
-            LazyVStack(spacing: 14) {
-                ForEach(model.river.items) { item in
-                    SwipeToTriageRow(
-                        onSwipeRight: { Task { await model.river.markRead(item) } },
-                        onSwipeLeft: { Task { await model.river.markUnread(item) } }
-                    ) {
-                        RiverCardView(item: item, unread: model.river.isUnread(item))
-                            .contentShape(Rectangle())
-                            .onTapGesture { openCompact(item) }
+            LazyVStack(alignment: .leading, spacing: 14) {
+                if let error = model.river.connectionError {
+                    Text(error).font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(Array(filteredItems.enumerated()), id: \.element.id) { index, item in
+                    if index == 0 || !Calendar.current.isDate(item.updatedAtMs.msToDate, inSameDayAs: filteredItems[index - 1].updatedAtMs.msToDate) {
+                        Text(dayLabel(item.updatedAtMs.msToDate))
+                            .font(.system(size: 11, weight: .semibold)).tracking(1.2)
+                            .foregroundStyle(Theme.textMuted(colorScheme)).padding(.vertical, 20)
                     }
+                    RiverCardView(item: item, unread: false)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            copy(item)
+                            copiedID = item.id
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            Button { sharedItem = item } label: {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 13, weight: .regular))
+                                    .foregroundStyle(Theme.textMuted(colorScheme).opacity(0.6))
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Share")
+                            .padding(4)
+                        }
+                        .overlay(alignment: .bottomTrailing) {
+                            if copiedID == item.id {
+                                Text("Copied").font(.caption).foregroundStyle(Theme.accent(model.settings.accentPreset, colorScheme)).padding(12)
+                            }
+                        }
                 }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 120)
         }
-        .scrollIndicators(.hidden)
         .background(Theme.background(colorScheme))
-        .refreshable { await model.sync.syncNow() }
+        .refreshable { model.river.requestRefresh() }
+        .sheet(item: $sharedItem) { item in
+            RiverShareSheet(text: item.content, sourceID: "river-" + item.id) { sharedItem = nil }
+                .presentationDetents([.height(540), .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private var regularList: some View {
@@ -186,7 +226,7 @@ struct RiverView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Theme.background(colorScheme))
-        .refreshable { await model.sync.syncNow() }
+        .refreshable { model.river.requestRefresh() }
     }
 
     private var readerPlaceholder: some View {
@@ -251,7 +291,7 @@ struct RiverView: View {
     }
 
     private func copy(_ item: RiverItem) {
-        UIPasteboard.general.string = item.clipboardText
+        UIPasteboard.general.string = item.content
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
@@ -260,19 +300,20 @@ struct RiverView: View {
             Image(systemName: "water.waves")
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(Theme.textMuted(colorScheme))
-            Text(model.river.available ? "The river is quiet" : "No team yet")
-                .font(.custom("Source Serif 4", size: 20).weight(.medium))
-            Text(model.river.available
-                 ? "Documents your team shares to River show up here."
-                 : "Join or create a team in the Mac app, then pull to refresh.")
+            Text("The river is quiet")
+                .font(.custom("Source Sans 3", size: 20))
+            Text(model.river.connectionError ?? "Things shared with you appear here.")
                 .font(.custom("Source Sans 3", size: 15))
                 .foregroundStyle(Theme.textMuted(colorScheme))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
+            if model.river.connectionError != nil {
+                Button("Try again") { model.river.requestRefresh() }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background(colorScheme))
-        .refreshableScroll { await model.sync.refreshTeamScope() }
+        .refreshableScroll { model.river.requestRefresh() }
     }
 }
 
@@ -436,64 +477,30 @@ struct RiverCardView: View {
     let unread: Bool
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
-
-    private var preview: String { item.preview }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                CallsignBadge(
-                    callsign: item.authorCallsign ?? item.authorInitials ?? "FT",
-                    accent: Theme.accent(model.settings.accentPreset, colorScheme)
-                )
-                Spacer()
-                if unread { UnreadDot() }
-                Text(item.updatedAtMs.msToDate.relativeShort)
+            HStack(spacing: 8) {
+                Text(item.updatedAtMs.msToDate.formatted(date: .omitted, time: .shortened))
                     .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
+                Text(item.createdBy.lowercased() == model.auth.userId?.uuidString.lowercased() ? "You" : item.authorLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Theme.textMuted(colorScheme).opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
+                Spacer(minLength: 44)
             }
-
-            Text(item.title)
-                .font(.custom("Source Serif 4", size: 20).weight(unread ? .semibold : .medium))
+            .foregroundStyle(Theme.textMuted(colorScheme))
+            Text(item.content)
+                .lineLimit(3)
+                .font(.custom("Source Sans 3", size: 16))
                 .foregroundStyle(Theme.text(colorScheme))
-                .lineLimit(2)
-
-            Text(preview)
-                .font(.custom("Source Sans 3", size: 15))
-                .foregroundStyle(Theme.textMuted(colorScheme))
-                .lineLimit(5)
-                .lineSpacing(3)
-
-            HStack {
-                Text(item.fileName)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                Spacer()
-                Button {
-                    UIPasteboard.general.string = item.clipboardText
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Theme.textMuted(colorScheme))
-                        .frame(width: 30, height: 30)
-                        .background(Theme.background(colorScheme), in: Circle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.top, 2)
+                .lineSpacing(4)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Theme.backgroundAlt(colorScheme))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .strokeBorder(unread ? Theme.unread.opacity(0.35) : Theme.border(colorScheme), lineWidth: 1)
-                )
-        )
+        .background(RoundedRectangle(cornerRadius: 16).fill(Theme.background(colorScheme)))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.border(colorScheme), lineWidth: 0.5))
+        .accessibilityHint("Copies text")
     }
 }
 

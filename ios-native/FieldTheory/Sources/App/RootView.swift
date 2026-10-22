@@ -57,9 +57,6 @@ struct RootView: View {
             configureConversations()
         }
         .onChange(of: model.auth.phase) { _, _ in configureConversations() }
-        .onChange(of: model.conversations.draftFromVoice) { _, text in
-            if text != nil { selectedTab = "agent" }
-        }
         .onChange(of: model.workspaceGeneration) { _, _ in
             // Workspace-local callbacks must not survive an account or
             // Reviewer Demo storage swap.
@@ -108,11 +105,11 @@ struct RootView: View {
                 VoiceView(showSettings: $showSettings)
             } else {
                 TabView(selection: $selectedTab) {
-                    Tab("Voice", systemImage: "waveform", value: "voice") {
+                    Tab("Local", systemImage: "waveform", value: "voice") {
                         VoiceView(showSettings: $showSettings)
                     }
-                    Tab("Agent", systemImage: "bubble.left.and.bubble.right", value: "agent") {
-                        ConversationView()
+                    Tab("River", systemImage: "water.waves", value: "river") {
+                        RiverView(showSettings: $showSettings)
                     }
                 }
             }

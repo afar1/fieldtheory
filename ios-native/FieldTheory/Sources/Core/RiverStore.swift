@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Supabase
 
 /// Local cache of team_documents plus on-device read state. Read state is
 /// keyed by (id, revision) so an item that gets updated upstream surfaces as
@@ -8,6 +9,136 @@ import Observation
 @Observable
 final class RiverStore {
     private let db: Database
+    private var client: SupabaseClient?
+    private var owner: String?
+    private var session = UUID()
+    private var channel: RealtimeChannelV2?
+    private var watchers: [Task<Void, Never>] = []
+    private var refreshTask: Task<Void, Never>?
+    private var fullRefreshPending = false
+    private var pendingDocumentIDs: Set<String> = []
+    private(set) var connectionError: String?
+
+    func start(client: SupabaseClient, userID: String) {
+        if owner == userID, channel != nil { return }
+        stop()
+        self.client = client
+        owner = userID
+        let token = session
+        let channel = client.channel("ios-river:\(userID):\(token.uuidString)")
+        self.channel = channel
+        let documents = channel.postgresChange(AnyAction.self, schema: "public", table: "river_documents")
+        let audience = channel.postgresChange(AnyAction.self, schema: "public", table: "river_document_audience", filter: "recipient_user_id=eq.\(userID)")
+        let targets = channel.postgresChange(AnyAction.self, schema: "public", table: "river_document_targets")
+        watchers.append(Task { [weak self] in
+            do {
+                try await channel.subscribeWithError()
+                guard let self, self.session == token else { return }
+            } catch {
+                guard let self, self.session == token else { return }
+                self.connectionError = "Live updates unavailable. Pull to refresh."
+            }
+        })
+        for (stream, key) in [(documents, "id"), (audience, "document_id"), (targets, "document_id")] {
+            watchers.append(Task { [weak self] in
+                for await action in stream {
+                    guard let self, self.session == token, !Task.isCancelled else { return }
+                    let record: [String: AnyJSON]
+                    switch action {
+                    case .insert(let row): record = row.record
+                    case .update(let row): record = row.record
+                    case .delete(let row): record = row.oldRecord
+                    }
+                    if case .string(let id) = record[key] {
+                        self.requestRefresh(documentIDs: [id])
+                    } else { self.requestRefresh() }
+                }
+            })
+        }
+        let membership = channel.postgresChange(AnyAction.self, schema: "public", table: "river_share_group_members", filter: "member_user_id=eq.\(userID)")
+        let groups = channel.postgresChange(AnyAction.self, schema: "public", table: "river_share_groups")
+        for stream in [membership, groups] {
+            watchers.append(Task { [weak self] in
+                for await _ in stream {
+                    guard let self, self.session == token, !Task.isCancelled else { return }
+                    self.requestRefresh()
+                }
+            })
+        }
+        let statuses = channel.statusChange
+        watchers.append(Task { [weak self] in
+            for await status in statuses {
+                guard let self, self.session == token, !Task.isCancelled else { return }
+                if status == .subscribed { self.requestRefresh() }
+            }
+        })
+        requestRefresh()
+    }
+
+    func stop() {
+        session = UUID()
+        watchers.forEach { $0.cancel() }
+        watchers.removeAll()
+        refreshTask?.cancel()
+        refreshTask = nil
+        fullRefreshPending = false
+        pendingDocumentIDs.removeAll()
+        if let channel, let client { Task { await client.removeChannel(channel) } }
+        channel = nil
+        client = nil
+        owner = nil
+    }
+
+    func stopAndWait() async {
+        let pending = refreshTask
+        stop()
+        await pending?.value
+    }
+
+    func requestRefresh(documentIDs: Set<String>? = nil) {
+        guard let client, let owner else { return }
+        if let documentIDs { pendingDocumentIDs.formUnion(documentIDs) }
+        else { fullRefreshPending = true }
+        guard refreshTask == nil else { return }
+        let token = session
+        refreshTask = Task { [weak self] in
+            guard let self else { return }
+            repeat {
+                let full = self.fullRefreshPending
+                let ids = self.pendingDocumentIDs
+                self.fullRefreshPending = false
+                self.pendingDocumentIDs.removeAll()
+                do {
+                    let rows = try await RiverTransport(client: client).documents(userID: owner, documentIDs: full ? nil : ids)
+                    guard self.session == token, !Task.isCancelled,
+                          client.auth.currentUser?.id.uuidString.lowercased() == owner else { return }
+                    // Cache replacement is atomic; realtime changes replace only the affected documents.
+                    var statements: [(sql: String, params: [SQLValue])] = []
+                    if full { statements.append(("DELETE FROM river_items", [])) }
+                    else {
+                        for id in ids { statements.append(("DELETE FROM river_items WHERE id = ?", [.text(id)])) }
+                    }
+                    for row in rows {
+                        statements.append(("""
+                            INSERT INTO river_items (id,title,content,author_initials,author_callsign,kind,revision,created_by,created_at_ms,updated_at_ms)
+                            VALUES (?,?,?,?,?,'document',?,?,?,?)
+                            """, [.text(row.id), .text(row.title), .text(row.content), row.author_initials.map(SQLValue.text) ?? .null,
+                                  row.author_callsign.map(SQLValue.text) ?? .null, .int(Int64(row.revision ?? 0)), .text(row.created_by),
+                                  .int(Timestamps.ms(fromISO: row.created_at)), .int(Timestamps.ms(fromISO: row.updated_at))]))
+                    }
+                    try await self.db.transaction(statements)
+                    guard self.session == token else { return }
+                    await self.reload()
+                    self.connectionError = nil
+                } catch {
+                    guard self.session == token, !Task.isCancelled else { return }
+                    self.connectionError = "River unavailable. Pull to retry."
+                }
+            } while (self.fullRefreshPending || !self.pendingDocumentIDs.isEmpty) && self.session == token && !Task.isCancelled
+            if self.session == token { self.refreshTask = nil }
+        }
+    }
+
 
     private(set) var items: [RiverItem] = []
     private(set) var readState: [String: Int] = [:] // id -> read_revision
@@ -77,7 +208,7 @@ final class RiverStore {
             })
             // nil = not resolved yet (stay hopeful); "" = resolved, no team.
             let scope = try await db.getMeta("river_team_scope")
-            available = scope != ""
+            available = client != nil || scope != ""
         } catch {
             items = []
         }
