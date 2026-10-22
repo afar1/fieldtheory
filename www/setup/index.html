@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Set up your Mac · Field Theory</title>
+  <meta name="description" content="Get ready to work with someone on a call. Set up Field Theory, local transcription, and your assistant, without starting over.">
+  <link rel="icon" href="/favicon.png">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/setup/setup.css">
+</head>
+<body>
+  <header class="setup-header"><a href="/" aria-label="Field Theory home"><img src="/images/fieldtheory-logo-black.png" alt="Field Theory"></a><a href="https://onboard.computer">Onboard</a></header>
+  <main>
+    <section class="intro">
+      <h1>Get your Mac ready<br>to work together.</h1>
+      <p>Record a call, turn it into text, and let your assistant help with the work. Start with what you already have.</p>
+      <fieldset class="host-picker"><legend>Which assistant do you use?</legend><label><input type="radio" name="host" value="chatgpt" checked><span>ChatGPT</span></label><label><input type="radio" name="host" value="claude"><span>Claude</span></label></fieldset>
+      <p id="host-note" class="muted"></p>
+    </section>
+
+    <section class="steps" aria-label="Set up Field Theory">
+      <article class="step">
+        <span class="step-number" aria-hidden="true">1</span>
+        <div><h2>Get Field Theory</h2><p>Install the setup preview, or open it if you already have it. Existing accounts and recording preferences are preserved.</p>
+        <div class="actions"><a class="primary" id="app-download" href="https://github.com/afar1/field-releases/releases/download/v0.3.75/Field.Theory-0.3.75-arm64.dmg">Download for Mac</a><a href="fieldtheory://onboard">Open Field Theory</a></div>
+        <p class="muted small" id="app-note">Apple Silicon · macOS 14 or later. This setup preview adds guidance for existing installations; app updates are offered only when needed.</p></div>
+      </article>
+      <article class="step">
+        <span class="step-number" aria-hidden="true">2</span>
+        <div><h2>Connect your assistant</h2><p id="plugin-instructions"></p>
+        <p class="preview-note">The Field Theory plugin is a local preview. It is not yet listed in the official ChatGPT or Claude directory.</p>
+        <details><summary>Install the preview plugin</summary><div id="plugin-install"></div><p>Already connected? Skip this step. You can also use the setup prompt without the plugin; your assistant will guide the checks it cannot perform directly.</p></details></div>
+      </article>
+      <article class="step">
+        <span class="step-number" aria-hidden="true">3</span>
+        <div><h2>Continue in one conversation</h2><p>Copy these instructions into your assistant. It checks what works, helps with what is missing, and guides each required approval.</p>
+        <div class="actions"><button class="primary" id="copy-prompt" type="button">Copy setup prompt</button><a id="assistant-download" href="https://chatgpt.com/download/" target="_blank" rel="noopener">Get ChatGPT</a></div>
+        <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+        <details><summary>Read the prompt before copying</summary><label class="sr-only" for="setup-prompt">Setup prompt</label><textarea id="setup-prompt" readonly spellcheck="false"></textarea></details></div>
+      </article>
+    </section>
+
+    <section class="expectations">
+      <h2>Ready means it works.</h2>
+      <p>Your assistant checks the account, local transcription, recording settings, and computer control separately. A short recording and a harmless computer action confirm the result.</p>
+      <div class="notes"><div><h3>You stay in control</h3><p>Sign in inside Field Theory. Enter verification codes there, never in the conversation. Approve Mac permissions when asked.</p></div><div><h3>Build when you’re ready</h3><p>Once the essentials work, choose whether to install the optional Builder tools through Onboard.</p></div></div>
+      <p class="muted small">This website cannot inspect your Mac. Your assistant and the installed app perform the checks; anything they cannot verify remains unknown.</p>
+    </section>
+  </main>
+  <footer><a href="/">Field Theory</a><a href="/privacy.html">Privacy</a><a href="mailto:support@fieldtheory.dev">Get help</a></footer>
+  <script src="/setup/setup-prompt.js"></script>
+  <script src="/setup/setup.js"></script>
+</body>
+</html>
