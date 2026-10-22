@@ -5,7 +5,7 @@
 .intro { padding:50px 0 28px; }
 .intro h1 { font-size:clamp(36px,5vw,50px); font-weight:500; letter-spacing:-1.8px; line-height:1.12; margin:0 0 22px; }
 .intro p { font-size:17px; line-height:1.65; max-width:510px; margin:0; }
-button:focus-visible, a:focus-visible, summary:focus-visible, textarea:focus-visible { outline:3px solid #75985a; outline-offset:4px; }
+button:focus-visible, a:focus-visible, summary:focus-visible, .prompt-text:focus-visible { outline:3px solid #75985a; outline-offset:4px; }
 .primary { display:inline-block; border:1px solid var(--color-text); background:var(--color-text); color:var(--color-bg); border-radius:6px; padding:12px 20px; font:inherit; font-size:15px; cursor:pointer; }
 .primary:hover { opacity:.86; }
 .copy-status { margin:10px 0 0; font-size:13px; color:var(--color-accent); }
@@ -15,7 +15,7 @@ summary { cursor:pointer; width:fit-content; }
 details p { font-size:14px; line-height:1.65; margin:16px 0; }
 details a { text-decoration:underline; text-underline-offset:3px; }
 .prompt-details { margin-top:20px; }
-textarea { width:100%; min-height:330px; margin-top:14px; padding:16px; background:#fff; color:var(--color-text); border:1px solid var(--color-border); border-radius:6px; font:13px/1.65 var(--font-mono); resize:vertical; }
+.prompt-text { margin-top:14px; padding:16px; background:#fff; color:var(--color-text); border:1px solid var(--color-border); border-radius:6px; font:13px/1.65 var(--font-mono); white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
 footer { display:flex; gap:24px; padding-top:20px; padding-bottom:32px; border-top:1px solid var(--color-border); }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
 @media(max-width:600px) { .setup-header, main, footer { padding-left:22px; padding-right:22px; } .setup-header { padding-top:24px; padding-bottom:24px; } .intro { padding-top:30px; } .intro h1 { letter-spacing:-1.2px; } }
