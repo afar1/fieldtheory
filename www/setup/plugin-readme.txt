@@ -21,7 +21,7 @@ If preflight reports missing Node, install the current LTS from [nodejs.org](htt
 
 ## Start setup
 
-Send **Set up my Mac with Field Theory** or use the complete prompt supplied by the Onboard/Field Theory preview website. The `setup` skill follows this order:
+Send **Set up my Mac with Field Theory** or use the complete prompt from the [Onboard preview](https://onboard-assisted-setup-afar1.vercel.app). Use the [matching signed/notarized Field Theory preview app](https://github.com/afar1/field-releases/releases/download/v0.3.78-onboarding.1/Field.Theory-0.3.78-onboarding.1-arm64.dmg) on Apple silicon; the stable app download lacks this setup endpoint. Intel preview packaging is not supplied here. Optional Builder also comes from this preview, not the production site. The `setup` skill follows this order:
 
 1. Check the actual host and current setup. Skip what is already working.
 2. Install missing essentials through Onboard, and connect the Field Theory account through native sign-in. Verification codes stay out of chat.
@@ -29,7 +29,7 @@ Send **Set up my Mac with Field Theory** or use the complete prompt supplied by 
 4. Test the real recording shortcut, the helper's call audio, local transcription and paste handoff, then perform a harmless computer-use action through the host's tools.
 5. Offer Builder only after essentials work and the user chooses it.
 
-The tools are `get_setup_status` and `setup_action`. Status reads the app's authenticated loopback helper, without user content, emails or tokens. It reports installed, configured and unknown separately. `computerUse: host-must-verify` and the recording/handoff tests cannot be inferred from app installation or permissions.
+The tools are `get_setup_status` and `setup_action`. Status reads the app's authenticated loopback helper, without user content, emails or tokens. It reports installed, configured and unknown separately, including whether native onboarding is complete. Busy recording actions return a specific stop-recording instruction; unknown native errors stay redacted. `computerUse: host-must-verify` and the recording/handoff tests cannot be inferred from app installation or permissions.
 
 The preview Mac app must expose `/native/onboarding/status`. An older running app reports `app-update-required`; an offline helper reports unavailable. Neither is treated as ready. The app source owns this endpoint and all native actions; this plugin never reads authentication databases or recording files.
 
