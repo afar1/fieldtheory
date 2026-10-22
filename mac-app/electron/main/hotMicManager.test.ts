@@ -125,7 +125,7 @@ describe('HotMicManager call audio', () => {
   it.each(['system-audio', 'microphone-and-system-audio'] as const)('only enforces a microphone when %s capture needs one', async source => {
     const { manager, nativeHelper } = createManager({ transcriptionInputSource: source });
     const priority = vi.fn(async () => undefined);
-    Reflect.set(manager, 'audioManager', { ensurePriorityEnforced: priority });
+    Reflect.set(manager, 'audioManager', { ensurePriorityEnforced: priority, getState: () => ({ devices: [], defaultInputId: null, priorityDeviceId: null }) });
     manager.activate();
     await flushAsyncWork();
     expect(nativeHelper.startRecording).toHaveBeenCalledWith(source);
