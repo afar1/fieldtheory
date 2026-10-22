@@ -1,110 +1,59 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="robots" content="noindex, nofollow" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Field Theory — Set up your Mac for AI</title>
-    <meta
-      name="description"
-      content="Set up Field Theory and your assistant. Reuse what already works, then add tools for building when you need them."
-    />
-    <link rel="icon" href="/favicon.ico" />
-    <style>
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        background: #fafafa;
-        color: #1d1d1f;
-        font: 17px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        -webkit-font-smoothing: antialiased;
-      }
-      .site-nav { display: flex; align-items: center; justify-content: space-between; max-width: 1120px; margin: auto; padding: 24px 28px; }
-      .site-nav img { display: block; width: 138px; height: auto; }
-      .site-nav a { color: inherit; text-decoration: none; font-size: 14px; }
-      .site-nav a:hover { color: #0071e3; }
-      main {
-        width: min(100%, 960px);
-        margin: auto;
-        padding: clamp(112px, 19vh, 200px) 28px 80px;
-        text-align: center;
-      }
-      h1 {
-        font-size: clamp(44px, 6.8vw, 76px);
-        font-weight: 600;
-        letter-spacing: -.055em;
-        line-height: 1.06;
-        margin: 0 0 28px;
-      }
-      .steps {
-        width: fit-content;
-        margin: 0 auto 34px;
-        padding-left: 24px;
-        text-align: left;
-        line-height: 1.9;
-        color: #424245;
-      }
-      .steps li { padding-left: 4px; }
-      .steps li::marker { color: #86868b; }
-      .steps a { color: inherit; text-decoration-color: #b6b6bc; text-underline-offset: 4px; }
-      .steps a:hover { color: #0071e3; }
-      p {
-        color: #6e6e73;
-        font-size: 21px;
-        line-height: 1.45;
-        max-width: 520px;
-        margin: 0 auto 34px;
-        text-wrap: balance;
-      }
-      .primary {
-        font: inherit;
-        font-weight: 500;
-        background: #0071e3;
-        color: #fff;
-        border: 0;
-        border-radius: 999px;
-        padding: 14px 26px;
-        cursor: pointer;
-      }
-      .primary:hover { background: #0077ed; }
-      :focus-visible { outline: 3px solid #0071e3; outline-offset: 5px; }
-      #feedback:empty { display: none; }
-      #feedback { font-size: 14px; color: #6e6e73; margin: 20px 0 0; }
-      details { max-width: 680px; margin: 25px auto 0; }
-      summary { display: inline-block; cursor: pointer; color: #6e6e73; font-size: 14px; list-style: none; }
-      summary::-webkit-details-marker { display: none; }
-      summary::after { content: "+"; display: inline-block; margin-left: 8px; }
-      details[open] summary::after { content: "−"; }
-      .prompt {
-        display: block;
-        width: 100%;
-        padding: 24px;
-        border: 1px solid #d2d2d7;
-        border-radius: 16px;
-        font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #fff;
-        color: #424245;
-        margin: 24px 0 0;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        text-align: left;
-      }
-      @media (max-width: 600px) {
-        main { padding: 112px 24px 56px; }
-        h1 { font-size: clamp(40px, 9vw, 54px); letter-spacing: -.05em; margin-bottom: 24px; }
-        p { font-size: 19px; max-width: 320px; margin-bottom: 30px; }
-        .prompt { padding: 20px; }
-      }
-    </style>
-  </head>
-  <body>
-    <nav class="site-nav" aria-label="Main navigation">
-      <a href="/" aria-label="Field Theory home"><img src="/images/fieldtheory-logo-black.png" alt="Field Theory" /></a>
-      <a href="/product">Product</a>
-    </nav>
-    <main>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Field Theory — Set up your Mac for AI</title>
+  <meta name="description" content="This prompt sets up the missing tools you need for AI.">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#faf9f7">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .setup { padding-bottom: var(--space-xl); }
+    .steps { width: fit-content; margin: var(--space-lg) auto; padding-left: 1.5rem; text-align: left; line-height: 2; color: var(--color-text-muted); }
+    .steps a { color: var(--color-text); text-decoration: underline; text-underline-offset: 3px; }
+    #feedback { color: var(--color-text-muted); font-size: .9rem; margin-top: var(--space-sm); }
+    #feedback:empty { display: none; }
+    details { max-width: 800px; margin: var(--space-md) auto 0; }
+    summary { cursor: pointer; color: var(--color-text-muted); font-size: .9rem; }
+    .prompt { margin-top: var(--space-md); padding: var(--space-md); background: var(--color-bg-alt); border: 1px solid var(--color-border); border-radius: var(--border-radius); white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; font-size: .9rem; }
+    :focus-visible { outline: 2px solid var(--color-text); outline-offset: 4px; }
+  </style>
+  <script defer src="/_vercel/insights/script.js"></script>
+</head>
+<body>
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="/" class="nav-logo"><img id="nav-logo-img" src="images/fieldtheory-logo-black.png" alt="Field Theory" class="nav-logo-img"></a>
+      <button class="theme-toggle theme-toggle-mobile" onclick="toggleTheme()" aria-label="Switch theme">◐</button>
+      <button class="nav-toggle" onclick="toggleNav()" aria-expanded="false" aria-controls="nav-links" aria-label="Toggle navigation">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <ul class="nav-links" id="nav-links">
+        <li><a href="/product">Product</a></li>
+        <li><a href="/product#pricing">Pricing</a></li>
+        <li><a href="/product#download">Download</a></li>
+        <li><a href="theory.html">Theory</a></li>
+        <li><a href="hot-mic.html">Hot Mic</a></li>
+        <li><a href="cli/">CLI</a></li>
+        <li class="theme-toggle-wrapper">
+          <button class="theme-toggle" onclick="toggleTheme()" aria-label="Switch theme">◐</button>
+          <span class="theme-label" id="theme-label">Switch theme</span>
+        </li>
+      </ul>
+    </div>
+  </nav>
+  <main class="hero setup">
+    <div class="container">
       <h1>Set up your Mac for AI.</h1>
-      <p>
+      <p class="hero-tagline">
         This prompt sets up the missing tools you need for AI.
       </p>
       <ol class="steps">
@@ -112,14 +61,91 @@
         <li>Click the Work tab</li>
         <li>Paste this prompt</li>
       </ol>
-      <button class="primary" id="copy">Copy setup prompt</button>
+      <button class="btn btn-primary" id="copy">Copy setup prompt</button>
       <div id="feedback" role="status" aria-live="polite"></div>
       <details id="read-prompt">
         <summary>Show prompt</summary>
         <div class="prompt" id="prompt" tabindex="0" role="region" aria-label="Setup prompt"></div>
       </details>
-    </main>
-    <script src="/setup/setup-prompt.js"></script>
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="footer-content">
+        <p class="footer-copyright"><span class="footer-brand">Field Theory</span> © 2026 <span class="footer-divider">|</span> <a href="mailto:support@fieldtheory.dev" class="footer-email">support@fieldtheory.dev</a> <span class="footer-divider">|</span> <a href="https://github.com/afar1/field-releases/issues" class="footer-email">Report an issue</a></p>
+        <ul class="footer-links">
+          <li><a href="privacy.html">Privacy</a></li>
+          <li><a href="/product#pricing">Pricing</a></li>
+          <li><a href="/product#download">Download</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="theory.html">Theory</a></li>
+          <li><a href="hot-mic.html">Hot Mic</a></li>
+          <li><a href="about.html">About</a></li>
+          <li><button class="theme-toggle" onclick="toggleTheme()" aria-label="Switch theme">◐</button></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+<script>
+    // Check for saved theme preference or default to light
+    if (localStorage.getItem('theme') === 'dark') {
+      document.body.classList.add('dark');
+    }
+
+    function toggleTheme() {
+      document.body.classList.toggle('dark');
+      const isDark = document.body.classList.contains('dark');
+      localStorage.setItem('theme', isDark ? 'dark' : 'light');
+      // Update logos based on theme
+      const logoImg = document.getElementById('nav-logo-img');
+      const footerLogoImg = document.getElementById('footer-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
+      if (footerLogoImg) {
+        footerLogoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
+      // Update theme-color meta tag for mobile browser chrome
+      updateThemeColor(isDark);
+    }
+
+    const savedButtonStyle = localStorage.getItem('btnStyle');
+    document.body.classList.add('btn-style-' + (savedButtonStyle === 'dash' ? 'dash' : 'pill'));
+
+    // Toggle mobile nav menu
+    function toggleNav() {
+      const navLinks = document.getElementById('nav-links');
+      if (navLinks) {
+        const open = navLinks.classList.toggle('open');
+        document.querySelector('.nav-toggle').setAttribute('aria-expanded', String(open));
+      }
+    }
+
+    // Update logo on page load based on saved theme
+    (function() {
+      const isDark = document.body.classList.contains('dark');
+      const logoImg = document.getElementById('nav-logo-img');
+      const footerLogoImg = document.getElementById('footer-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
+      if (footerLogoImg) {
+        footerLogoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
+      // Update theme-color meta tag
+      updateThemeColor(isDark);
+    })();
+
+    function updateThemeColor(isDark) {
+      const themeColor = isDark ? '#1e1e1e' : '#faf9f7';
+      let meta = document.querySelector('meta[name="theme-color"]:not([media])');
+      if (meta) {
+        meta.setAttribute('content', themeColor);
+      }
+    }
+
+</script>
+<script src="/setup/setup-prompt.js"></script>
     <script>
       if (["#pricing", "#download"].includes(location.hash)) {
         location.replace("/product" + location.hash);
@@ -145,5 +171,5 @@
         }
       };
     </script>
-  </body>
+</body>
 </html>
