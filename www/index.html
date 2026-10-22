@@ -12,6 +12,8 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/styles.css">
   <style>
+    body { min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; }
+    .setup { flex: 1; }
     .footer-content { flex-wrap: wrap; gap: var(--space-md); }
     .footer-links { flex-wrap: wrap; }
     .footer-links a { white-space: nowrap; }
@@ -60,7 +62,7 @@
         This prompt sets up the missing tools you need for AI.
       </p>
       <ol class="steps">
-        <li><a href="https://chatgpt.com/download/">Install ChatGPT</a></li>
+        <li><a href="https://chatgpt.com/download/" target="_blank" rel="noopener noreferrer">Install ChatGPT</a> (or <a href="https://claude.com/download" target="_blank" rel="noopener noreferrer">Claude</a>)</li>
         <li>Click the Work tab</li>
         <li>Paste this prompt</li>
       </ol>
