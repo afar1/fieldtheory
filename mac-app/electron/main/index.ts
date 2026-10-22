@@ -404,7 +404,6 @@ const BOOT_MARK = Date.now();
 startupMark('module-loaded');
 const VISION_BUILD_ENABLED = false;
 const MARKDOWN_PREVIEW_MAX_BYTES = 512 * 1024;
-const SHARED_FILES_SYNC_DEBOUNCE_MS = 1500;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
 const { exec, execFile: execFileCp, execFileSync } = require('child_process');
@@ -4037,7 +4036,6 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
   log.info('Field Theory browser helper listening at %s', browserUrl);
 }
 let librarySyncService: LibrarySyncService | null = null;
-let sharedFilesSyncTimeout: ReturnType<typeof setTimeout> | null = null;
 let sharedTeamService: SharedTeamService | null = null;
 let riverTeamService: RiverTeamService | null = null;
 let riverTeamUserId: string | null = null;
@@ -4966,7 +4964,6 @@ function refreshFieldTheorySyncServices(): void {
   }
   getRiverTeamService();
   if (!canUseSharedFeatures()) {
-    clearPendingSharedFilesSync();
     void sharedSyncService?.dispose();
     sharedSyncService = null;
     sharedTeamService = null;
@@ -4979,6 +4976,7 @@ function refreshFieldTheorySyncServices(): void {
       sharedSyncService = new SharedSyncService(authManager, sharedTeamService ?? undefined, new RiverTargetService(authManager, entitlement), entitlement);
       sharedSyncService.on('presenceChanged', broadcastSharedFilePresence);
       sharedSyncService.on('pinsChanged', broadcastSharedFilePinsChanged);
+      sharedSyncService.on('timelineChanged', broadcastRiverTimelineChanged);
       sharedSyncService.on('cacheChanged', () => {
         librarianManager?.emit('library:changed');
       });
@@ -5008,30 +5006,11 @@ function refreshFieldTheorySyncServices(): void {
   }
 }
 
-function clearPendingSharedFilesSync(): void {
-  if (!sharedFilesSyncTimeout) return;
-  clearTimeout(sharedFilesSyncTimeout);
-  sharedFilesSyncTimeout = null;
-}
-
 function scheduleLibrarySyncIfAllowed(): void {
   refreshFieldTheorySyncServices();
   if (canUseFieldTheorySync()) {
     librarySyncService?.scheduleSync();
   }
-  if (canUseSharedFeatures()) {
-    scheduleSharedFilesSyncAndBroadcastChanges();
-  }
-}
-
-function scheduleSharedFilesSyncAndBroadcastChanges(): void {
-  if (sharedFilesSyncTimeout) {
-    clearTimeout(sharedFilesSyncTimeout);
-  }
-  sharedFilesSyncTimeout = setTimeout(() => {
-    sharedFilesSyncTimeout = null;
-    void syncSharedFilesAndBroadcastChanges();
-  }, SHARED_FILES_SYNC_DEBOUNCE_MS);
 }
 
 async function syncSharedFilesAndBroadcastChanges(): Promise<void> {
@@ -5055,6 +5034,13 @@ function broadcastSharedFilePresence(payload: { sharedId: string; users: SharedF
     if (!window.isDestroyed()) {
       window.webContents.send('sharedFiles:presenceChanged', payload);
     }
+  });
+}
+
+function broadcastRiverTimelineChanged(): void {
+  browserHelperServer?.emitNativeEvent({ type: 'sharedFiles:timelineChanged' });
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) window.webContents.send('sharedFiles:timelineChanged');
   });
 }
 
@@ -17275,7 +17261,6 @@ if (!gotTheLock) {
     { name: 'browser-helper', run: () => browserHelperServer?.stop() },
     { name: 'browser-state', run: () => clearBrowserHelperState() },
     { name: 'library-sync', run: () => librarySyncService?.dispose() },
-    { name: 'shared-sync-timer', run: () => clearPendingSharedFilesSync() },
     { name: 'shared-sync', run: () => sharedSyncService?.dispose() },
     { name: 'commands-sync', run: () => commandSyncService?.destroy() },
     { name: 'file-watchers-and-presence', run: () => cleanupFileWatchersBeforeQuit() },

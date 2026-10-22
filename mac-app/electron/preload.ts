@@ -4540,6 +4540,11 @@ const sharedFilesAPI = {
     ipcRenderer.on('sharedFiles:presenceChanged', handler);
     return () => ipcRenderer.removeListener('sharedFiles:presenceChanged', handler);
   },
+  onTimelineChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('sharedFiles:timelineChanged', handler);
+    return () => ipcRenderer.removeListener('sharedFiles:timelineChanged', handler);
+  },
   onPinsChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('sharedFiles:pinsChanged', handler);

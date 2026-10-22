@@ -308,6 +308,10 @@ export class SharedSyncService extends EventEmitter {
   private remoteSyncInFlight = false;
   private remoteSyncQueued = false;
   private disposed = false;
+  private pendingDocumentIds = new Set<string>();
+  private documentSyncInFlight = false;
+  private cachePaths = new Map<string, string>();
+  private cacheIndexReady: Promise<void> | null = null;
   private syncGeneration = 0;
 
   constructor(
@@ -416,8 +420,10 @@ export class SharedSyncService extends EventEmitter {
           schema: 'public',
           table: 'river_documents',
         },
-        () => {
-          void this.syncFromRemoteChange();
+        (payload: { new?: Record<string, unknown>; old?: Record<string, unknown> }) => {
+          const id = payload?.new?.id ?? payload?.old?.id;
+          if (typeof id === 'string') this.queueDocumentChange(id);
+          else void this.syncFromRemoteChange();
         },
       )
       .on(
@@ -428,8 +434,10 @@ export class SharedSyncService extends EventEmitter {
           table: 'river_document_audience',
           filter: `recipient_user_id=eq.${session.user.id}`,
         },
-        () => {
-          void this.syncFromRemoteChange();
+        (payload: { new?: Record<string, unknown>; old?: Record<string, unknown> }) => {
+          const id = payload?.new?.document_id ?? payload?.old?.document_id;
+          if (typeof id === 'string') this.queueDocumentChange(id);
+          else void this.syncFromRemoteChange();
         },
       )
       .on(
@@ -439,8 +447,10 @@ export class SharedSyncService extends EventEmitter {
           schema: 'public',
           table: 'river_document_targets',
         },
-        () => {
-          void this.syncFromRemoteChange();
+        (payload: { new?: Record<string, unknown>; old?: Record<string, unknown> }) => {
+          const id = payload?.new?.document_id ?? payload?.old?.document_id;
+          if (typeof id === 'string') this.queueDocumentChange(id);
+          else void this.syncFromRemoteChange();
           this.emit('targetsChanged');
         },
       )
@@ -454,6 +464,7 @@ export class SharedSyncService extends EventEmitter {
         () => {
           void this.syncFromRemoteChange();
           this.emit('targetsChanged');
+          this.emit('timelineChanged');
         },
       )
       .on(
@@ -466,6 +477,7 @@ export class SharedSyncService extends EventEmitter {
         },
         () => {
           this.emit('targetsChanged');
+          this.emit('timelineChanged');
         },
       )
       .on(
@@ -478,6 +490,7 @@ export class SharedSyncService extends EventEmitter {
         },
         () => {
           this.emit('targetsChanged');
+          this.emit('timelineChanged');
         },
       )
       .on(
@@ -515,6 +528,7 @@ export class SharedSyncService extends EventEmitter {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.pendingDocumentIds.clear();
     this.syncGeneration++;
     await this.clearPresence();
     await this.stopRemoteChangeSync();
@@ -534,6 +548,7 @@ export class SharedSyncService extends EventEmitter {
         this.emit('cacheChanged', result);
         this.emit('pinsChanged');
       }
+      this.emit('timelineChanged');
     } catch (err) {
       log.warn('River realtime sync failed:', err);
     } finally {
@@ -542,6 +557,94 @@ export class SharedSyncService extends EventEmitter {
         this.remoteSyncQueued = false;
         void this.syncFromRemoteChange();
       }
+    }
+  }
+
+  private queueDocumentChange(id: string): void {
+    if (this.disposed) return;
+    this.documentChangeGeneration++;
+    this.pendingDocumentIds.add(id);
+    // Coalesce events from the same commit without adding a delivery timer.
+    if (!this.documentSyncInFlight) {
+      this.documentSyncInFlight = true;
+      queueMicrotask(() => { void this.syncChangedDocuments(); });
+    }
+  }
+
+  private async loadCacheIndex(): Promise<void> {
+    this.cacheIndexReady ??= (async () => {
+      const root = sharedFilesRoot();
+      await fs.promises.mkdir(root, { recursive: true });
+      const entries = await fs.promises.readdir(root, { withFileTypes: true });
+      entries.forEach((entry) => this.cacheFileNames.add(entry.name));
+      for (const entry of entries) {
+        if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
+        const filePath = path.join(root, entry.name);
+        try {
+          const parsed = parseSharedFileFrontmatter(await fs.promises.readFile(filePath, 'utf-8'));
+          if (parsed?.sharedId) this.cachePaths.set(parsed.sharedId, filePath);
+        } catch { /* Ignore files removed while indexing. */ }
+      }
+    })();
+    await this.cacheIndexReady;
+  }
+
+  private async writeRemoteCache(id: string, row?: RiverDocumentLike, current = () => !this.disposed): Promise<void> {
+    const previous = this.cacheWrites.get(id) ?? Promise.resolve();
+    const write = previous.catch(() => {}).then(async () => {
+      if (!current()) return;
+      const existingPath = this.cachePaths.get(id);
+      if (!row) {
+        if (existingPath) {
+          await fs.promises.rm(existingPath, { force: true });
+          this.cacheFileNames.delete(path.basename(existingPath));
+        }
+        this.cachePaths.delete(id);
+        return;
+      }
+      const cachePath = existingPath ?? path.join(sharedFilesRoot(), buildSharedCacheFileName({
+        title: sharedRowTitle(row), authorInitials: row.author_initials ?? undefined,
+        existingFileNames: [...this.cacheFileNames],
+      }));
+      this.cacheFileNames.add(path.basename(cachePath));
+      this.cachePaths.set(id, cachePath);
+      const content = this.cacheContentForRow(row);
+      const currentContent = await fs.promises.readFile(cachePath, 'utf-8').catch(() => null);
+      if (currentContent !== content && current()) await fs.promises.writeFile(cachePath, content, 'utf-8');
+    });
+    this.cacheWrites.set(id, write);
+    try { await write; } finally {
+      if (this.cacheWrites.get(id) === write) this.cacheWrites.delete(id);
+    }
+  }
+
+  private async syncChangedDocuments(): Promise<void> {
+    const supabase = this.authManager.getSupabaseClient();
+    const userId = this.authManager.getSession()?.user?.id;
+    try {
+      while (!this.disposed && supabase && userId && this.pendingDocumentIds.size > 0) {
+        const ids = [...this.pendingDocumentIds].slice(0, 100);
+        ids.forEach((id) => this.pendingDocumentIds.delete(id));
+        // Always re-read through RLS, including audience revocations. Event payloads
+        // alone do not establish that this user can still read a document.
+        const { data, error } = await supabase.from('river_documents')
+          .select('*').in('id', ids).is('deleted_at', null);
+        if (error) throw error;
+        if (this.disposed || this.authManager.getSession()?.user?.id !== userId) return;
+        await this.loadCacheIndex();
+        const rows = new Map(((data ?? []) as RiverDocumentRow[]).map((row) => [row.id, row]));
+        for (const id of ids) {
+          if (this.disposed || this.authManager.getSession()?.user?.id !== userId) return;
+          const row = rows.get(id);
+          await this.writeRemoteCache(id, row);
+        }
+        this.emit('timelineChanged');
+        this.emit('cacheChanged', { written: rows.size, removed: ids.length - rows.size, created: 0, errors: [] });
+      }
+    } catch (err) {
+      log.warn('River document delivery failed:', err);
+    } finally {
+      this.documentSyncInFlight = false;
     }
   }
 
@@ -1103,6 +1206,8 @@ export class SharedSyncService extends EventEmitter {
     ensureDir(root);
     if (createdRoot) result.created = 1;
 
+    const changeGeneration = this.documentChangeGeneration;
+    await this.loadCacheIndex();
     let data: unknown[] = [];
     let canonicalInventoryComplete = false;
     try {
@@ -1123,10 +1228,12 @@ export class SharedSyncService extends EventEmitter {
     }
 
     if (!current()) return result;
+    if (this.disposed || changeGeneration !== this.documentChangeGeneration) return result;
     const activeIds = new Set<string>();
     let currentUserCallsign: Promise<string | null> | null = null;
     for (const row of data as RiverDocumentRow[]) {
       try {
+        if (this.disposed || changeGeneration !== this.documentChangeGeneration) return result;
         let cacheRow = row;
         if (!row.author_callsign && row.created_by === session.user.id) {
           currentUserCallsign ??= authorCallsignForSession(supabase, session);
@@ -1134,7 +1241,7 @@ export class SharedSyncService extends EventEmitter {
           if (callsign) cacheRow = { ...row, author_callsign: callsign };
         }
         if (!current()) return result;
-        this.writeRowToCache(cacheRow);
+        await this.writeRemoteCache(row.id, cacheRow, current);
         activeIds.add(row.id);
         result.written++;
       } catch (err) {
@@ -1145,7 +1252,7 @@ export class SharedSyncService extends EventEmitter {
 
     const legacyInventoryComplete = await this.syncLegacyRows(result, activeIds, current);
     if (!current()) return result;
-    if (canonicalInventoryComplete && legacyInventoryComplete) {
+    if (!this.disposed && changeGeneration === this.documentChangeGeneration && canonicalInventoryComplete && legacyInventoryComplete) {
       result.removed = this.removeStaleCacheFiles(activeIds);
     }
     return result;
@@ -1247,7 +1354,7 @@ export class SharedSyncService extends EventEmitter {
     for (const row of rows as TeamDocumentRow[]) {
       try {
         if (activeIds.has(row.id)) continue;
-        this.writeRowToCache(row);
+        await this.writeRemoteCache(row.id, row, current);
         activeIds.add(row.id);
         result.written++;
       } catch (err) {
@@ -1586,6 +1693,8 @@ export class SharedSyncService extends EventEmitter {
   }
 
   private existingCachePathForRow(sharedId: string): string | null {
+    const knownPath = this.cachePaths.get(sharedId);
+    if (knownPath && fs.existsSync(knownPath)) return knownPath;
     const root = sharedFilesRoot();
     if (!fs.existsSync(root)) return null;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
@@ -1606,13 +1715,21 @@ export class SharedSyncService extends EventEmitter {
     const root = sharedFilesRoot();
     ensureDir(root);
     const cachePath = this.cachePathForRow(row);
+    const content = this.cacheContentForRow(row);
+    fs.writeFileSync(cachePath, content, 'utf-8');
+    this.cachePaths.set(row.id, cachePath);
+    this.cacheFileNames.add(path.basename(cachePath));
+    return cachePath;
+  }
+
+  private cacheContentForRow(row: RiverDocumentLike): string {
     const type: SharedFileType = row.kind === 'command' ? 'command' : row.path.startsWith('Plans/') ? 'plan' : 'document';
     const portableContent = makeMarkdownImagesPortable(
       path.join(sharedFilesRoot(), `${sharedRowTitle(row)}.md`),
       stripSharedFileFrontmatter(row.content),
       { libraryRoots: [libraryDir()] },
     ).content;
-    const content = applySharedFileFrontmatter(portableContent, {
+    return applySharedFileFrontmatter(portableContent, {
       sharedId: row.id,
       title: sharedRowTitle(row),
       teamId: 'team_scope_user_id' in row ? row.team_scope_user_id : undefined,
@@ -1625,8 +1742,6 @@ export class SharedSyncService extends EventEmitter {
       revision: row.revision ?? 0,
       updatedAt: row.updated_at,
     });
-    fs.writeFileSync(cachePath, content, 'utf-8');
-    return cachePath;
   }
 
   private writePrivateConflictCopy(row: RiverDocumentLike, content: string): string {

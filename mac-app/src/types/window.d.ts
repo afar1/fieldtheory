@@ -2163,6 +2163,7 @@ interface SharedFilesAPI {
   setPinned: (filePath: string, pinned: boolean) => Promise<SharedFilePinResult>;
   onPresenceChanged: (callback: (payload: { sharedId: string; users: SharedFilePresenceUser[] }) => void) => () => void;
   onPinsChanged: (callback: () => void) => () => void;
+  onTimelineChanged: (callback: () => void) => () => void;
 }
 
 type SharedTeamUnavailableReason =

@@ -515,34 +515,57 @@ export default function RiverReader({
     if (!active) return;
     let cancelled = false;
     const sequence = ++requestSequence.current;
-    setLoading(!hasLoadedRef.current);
-    setError(null);
-    void Promise.all([
-      window.sharedFilesAPI?.getTimeline?.({ scope, sourceIds: timelineSourceIds, limit: 50 }) ?? Promise.resolve([]),
-      window.sharedFilesAPI?.getTargets?.('') ?? Promise.resolve([]),
-      window.sharedFilesAPI?.getAvailability?.() ?? Promise.resolve(null),
-    ])
-      .then(([nextItems, nextTargets, nextAvailability]) => {
-        if (cancelled || sequence !== requestSequence.current) return;
-        setItems(nextItems ?? []);
-        setTargets(nextTargets ?? []);
-        setAvailability(nextAvailability);
-        hasLoadedRef.current = true;
-      })
-      .catch((err) => {
-        console.warn('[RiverReader] timeline load failed:', err);
+    let loadingTimeline = false;
+    let queued = false;
+    const refresh = async () => {
+      if (cancelled || sequence !== requestSequence.current) return;
+      if (loadingTimeline) { queued = true; return; }
+      loadingTimeline = true;
+      try {
+        do {
+          queued = false;
+          const nextItems = await window.sharedFilesAPI?.getTimeline?.({ scope, sourceIds: timelineSourceIds, limit: 50 });
+          if (cancelled || sequence !== requestSequence.current) return;
+          setItems(nextItems ?? []);
+          hasLoadedRef.current = true;
+          setError(null);
+          setLoading(false);
+        } while (queued && !cancelled);
+      } catch (err) {
         if (!cancelled && sequence === requestSequence.current) {
-          if (!hasLoadedRef.current) setItems([]);
+          console.warn('[RiverReader] timeline load failed:', err);
           setError('River timeline could not load. Cached River files remain available in the sidebar.');
+          setLoading(false);
         }
-      })
-      .finally(() => {
-        if (!cancelled && sequence === requestSequence.current) setLoading(false);
-      });
+      } finally {
+        loadingTimeline = false;
+      }
+    };
+    // Subscribe before the initial read so a share arriving during it is not lost.
+    const unsubscribe = window.sharedFilesAPI?.onTimelineChanged?.(() => { void refresh(); });
+    const unsubscribePins = window.sharedFilesAPI?.onPinsChanged?.(() => { void refresh(); });
+    setLoading(!hasLoadedRef.current);
+    void refresh();
     return () => {
       cancelled = true;
+      unsubscribe?.();
+      unsubscribePins?.();
     };
   }, [active, scope, timelineSourceIds, membershipRevision]);
+
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    const sequence = requestSequence.current;
+    // Destination/account metadata must never hold up the document stream.
+    void window.sharedFilesAPI?.getTargets?.('').then((next) => {
+      if (!cancelled && sequence === requestSequence.current) setTargets(next ?? []);
+    }).catch((err) => console.warn('[RiverReader] targets load failed:', err));
+    void window.sharedFilesAPI?.getAvailability?.().then((next) => {
+      if (!cancelled && sequence === requestSequence.current) setAvailability(next);
+    }).catch((err) => console.warn('[RiverReader] availability load failed:', err));
+    return () => { cancelled = true; };
+  }, [active, membershipRevision]);
 
   const toggleSource = (targetId: string) => {
     const allSourceIds = filterTargets.map((target) => target.id);

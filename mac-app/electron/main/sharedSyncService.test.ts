@@ -1283,6 +1283,62 @@ describe('SharedSyncService cache behavior', () => {
     await expect(receiver.getPinnedSidebarItemIds()).resolves.toEqual(['wiki:River (shared)/Plan AF']);
   });
 
+  it('delivers only changed documents, coalesces bursts, and removes revoked content', async () => {
+    const handlers: Record<string, (payload: unknown) => void> = {};
+    const channel = {
+      on: (_event: string, config: { table: string }, handler: (payload: unknown) => void) => {
+        handlers[config.table] = handler; return channel;
+      },
+      subscribe: () => channel,
+    };
+    const row = makeLegacyTimelineRow('shared-push');
+    let readable = true;
+    let release: (() => void) | undefined;
+    const requested: string[][] = [];
+    const supabase = {
+      channel: () => channel,
+      removeChannel: async () => {},
+      from: (table: string) => {
+        expect(table).toBe('river_documents');
+        return {
+          select() { return this; },
+          in(_column: string, ids: string[]) { requested.push(ids); return this; },
+          async is() {
+            if (requested.length === 1) await new Promise<void>((resolve) => { release = resolve; });
+            return { data: readable ? [row] : [], error: null };
+          },
+        };
+      },
+    };
+    const auth = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-2' } }),
+    } as unknown as AuthManager;
+    const service = new SharedSyncService(auth);
+    const fullSync = vi.spyOn(service, 'syncOnce');
+    const delivered = vi.fn();
+    service.on('timelineChanged', delivered);
+    await service.startRemoteChangeSync();
+    const event = { new: { document_id: row.id } };
+    handlers.river_document_audience(event);
+    handlers.river_document_audience(event);
+    await vi.waitFor(() => expect(release).toBeDefined());
+    // A later event must survive the current read, even when it names the same row.
+    handlers.river_documents({ new: { id: row.id } });
+    release?.();
+    await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(2));
+    expect(requested).toEqual([[row.id], [row.id]]);
+    expect(fullSync).not.toHaveBeenCalled();
+    const cacheFiles = fs.readdirSync(sharedFilesRoot());
+    expect(cacheFiles).toHaveLength(1);
+    expect(fs.readFileSync(path.join(sharedFilesRoot(), cacheFiles[0]), 'utf-8')).toContain('Old River body');
+    readable = false;
+    handlers.river_document_audience(event);
+    await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(3));
+    expect(fs.readdirSync(sharedFilesRoot())).toHaveLength(0);
+    await service.dispose();
+  });
+
   it('queues a second River realtime sync when another document event arrives mid-sync', async () => {
     const root = sharedFilesRoot();
     const cachePath = path.join(root, 'Plan AF.md');

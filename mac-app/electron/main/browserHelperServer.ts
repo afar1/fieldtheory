@@ -98,6 +98,7 @@ export type BrowserHelperNativeEvent =
   | { type: 'taggedDocs:scanProgress'; progress: unknown }
   | { type: 'sharedFiles:presenceChanged'; payload: unknown }
   | { type: 'sharedFiles:pinsChanged' }
+  | { type: 'sharedFiles:timelineChanged' }
   | { type: 'commands:changed'; commands: unknown[] }
   | { type: 'commands:directoryChanged'; directoryPath: string | null }
   | { type: 'commands:localCommandStatus'; status: unknown }

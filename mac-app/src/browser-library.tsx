@@ -375,6 +375,7 @@ function createBrowserEventHub(config: BrowserHelperConfig) {
       'taggedDocs:scanProgress',
       'sharedFiles:presenceChanged',
       'sharedFiles:pinsChanged',
+      'sharedFiles:timelineChanged',
       'commands:changed',
       'commands:directoryChanged',
       'commands:localCommandStatus',
@@ -1152,6 +1153,7 @@ export async function installBrowserLibraryHost(config: BrowserHelperConfig): Pr
     ).result,
     onPresenceChanged: (callback: (payload: unknown) => void) => events.on('sharedFiles:presenceChanged', (detail) => callback(detail.payload)),
     onPinsChanged: (callback: () => void) => events.on('sharedFiles:pinsChanged', callback),
+    onTimelineChanged: (callback: () => void) => events.on('sharedFiles:timelineChanged', callback),
   } as any;
 
   window.markdownImagesAPI = {

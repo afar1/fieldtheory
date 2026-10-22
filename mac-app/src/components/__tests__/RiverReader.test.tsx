@@ -70,6 +70,50 @@ afterEach(() => {
 });
 
 describe('RiverReader', () => {
+  it('shows pushed shares without waiting for metadata and keeps expanded cards open', async () => {
+    let notify: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    let current = timelineItems;
+    const getTimeline = vi.fn(async () => current);
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getTimeline,
+        getTargets: () => new Promise(() => {}),
+        getAvailability: () => new Promise(() => {}),
+        onTimelineChanged: (callback: () => void) => { notify = callback; return unsubscribe; },
+      },
+    });
+    const { unmount } = render(<RiverReader />);
+    expect(await screen.findByText('Launch Brief')).toBeTruthy();
+    fireEvent.click(screen.getByText('Show more ▾'));
+    const newItem = { ...timelineItems[0], documentId: 'doc-2', title: 'New shared brief' };
+    current = [newItem, ...timelineItems];
+    const started = performance.now();
+    await act(async () => { notify?.(); });
+    expect(await screen.findByText('New shared brief')).toBeTruthy();
+    expect(screen.getAllByText('Launch Brief')).toHaveLength(1);
+    expect(screen.getByText('Collapse ▴')).toBeTruthy();
+    expect(performance.now() - started).toBeLessThan(2000);
+    unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('reads again when a share arrives during an in-flight timeline read', async () => {
+    let notify: (() => void) | undefined;
+    let finish: ((items: typeof timelineItems) => void) | undefined;
+    const getTimeline = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
+      .mockResolvedValue([{ ...timelineItems[0], title: 'Arrived during read' }]);
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: { getTimeline, onTimelineChanged: (callback: () => void) => { notify = callback; return () => {}; } },
+    });
+    render(<RiverReader />);
+    await act(async () => { notify?.(); notify?.(); finish?.([]); });
+    expect(await screen.findByText('Arrived during read')).toBeTruthy();
+  });
+
   it('loads the private timeline and opens cached cards', async () => {
     const getTimeline = vi.fn(async () => timelineItems);
     const onOpenItem = vi.fn();
