@@ -514,7 +514,7 @@ export default function RiverReader({
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
-    const sequence = ++requestSequence.current;
+    const sequence = requestSequence.current;
     let loadingTimeline = false;
     let queued = false;
     const refresh = async () => {

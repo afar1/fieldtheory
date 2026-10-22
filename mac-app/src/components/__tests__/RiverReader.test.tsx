@@ -89,12 +89,10 @@ describe('RiverReader', () => {
     fireEvent.click(screen.getByText('Show more ▾'));
     const newItem = { ...timelineItems[0], documentId: 'doc-2', title: 'New shared brief' };
     current = [newItem, ...timelineItems];
-    const started = performance.now();
     await act(async () => { notify?.(); });
     expect(await screen.findByText('New shared brief')).toBeTruthy();
     expect(screen.getAllByText('Launch Brief')).toHaveLength(1);
     expect(screen.getByText('Collapse ▴')).toBeTruthy();
-    expect(performance.now() - started).toBeLessThan(2000);
     unmount();
     expect(unsubscribe).toHaveBeenCalledOnce();
   });

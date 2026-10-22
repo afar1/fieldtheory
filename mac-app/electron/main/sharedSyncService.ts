@@ -312,6 +312,10 @@ export class SharedSyncService extends EventEmitter {
   private documentSyncInFlight = false;
   private cachePaths = new Map<string, string>();
   private cacheIndexReady: Promise<void> | null = null;
+  private cacheIndexed = false;
+  private cacheFileNames = new Set<string>();
+  private cacheWrites = new Map<string, Promise<void>>();
+  private documentChangeGeneration = 0;
   private syncGeneration = 0;
 
   constructor(
@@ -585,6 +589,7 @@ export class SharedSyncService extends EventEmitter {
           if (parsed?.sharedId) this.cachePaths.set(parsed.sharedId, filePath);
         } catch { /* Ignore files removed while indexing. */ }
       }
+      this.cacheIndexed = true;
     })();
     await this.cacheIndexReady;
   }
@@ -620,7 +625,10 @@ export class SharedSyncService extends EventEmitter {
 
   private async syncChangedDocuments(): Promise<void> {
     const supabase = this.authManager.getSupabaseClient();
-    const userId = this.authManager.getSession()?.user?.id;
+    const session = this.authManager.getSession();
+    const userId = session?.user?.id;
+    const current = () => !this.disposed && this.authManager.getSession()?.user?.id === userId
+      && this.authManager.getSession()?.access_token === session?.access_token;
     try {
       while (!this.disposed && supabase && userId && this.pendingDocumentIds.size > 0) {
         const ids = [...this.pendingDocumentIds].slice(0, 100);
@@ -630,14 +638,15 @@ export class SharedSyncService extends EventEmitter {
         const { data, error } = await supabase.from('river_documents')
           .select('*').in('id', ids).is('deleted_at', null);
         if (error) throw error;
-        if (this.disposed || this.authManager.getSession()?.user?.id !== userId) return;
+        if (!current()) return;
         await this.loadCacheIndex();
         const rows = new Map(((data ?? []) as RiverDocumentRow[]).map((row) => [row.id, row]));
         for (const id of ids) {
-          if (this.disposed || this.authManager.getSession()?.user?.id !== userId) return;
+          if (!current()) return;
           const row = rows.get(id);
-          await this.writeRemoteCache(id, row);
+          await this.writeRemoteCache(id, row, current);
         }
+        if (!current()) return;
         this.emit('timelineChanged');
         this.emit('cacheChanged', { written: rows.size, removed: ids.length - rows.size, created: 0, errors: [] });
       }
@@ -1200,7 +1209,8 @@ export class SharedSyncService extends EventEmitter {
     const generation = ++this.syncGeneration;
     const current = () => generation === this.syncGeneration
       && this.authManager.getSession()?.user.id === session.user.id
-      && this.authManager.getSession()?.access_token === session.access_token;
+      && this.authManager.getSession()?.access_token === session.access_token
+      && changeGeneration === this.documentChangeGeneration;
     const root = sharedFilesRoot();
     const createdRoot = !fs.existsSync(root);
     ensureDir(root);
@@ -1253,7 +1263,7 @@ export class SharedSyncService extends EventEmitter {
     const legacyInventoryComplete = await this.syncLegacyRows(result, activeIds, current);
     if (!current()) return result;
     if (!this.disposed && changeGeneration === this.documentChangeGeneration && canonicalInventoryComplete && legacyInventoryComplete) {
-      result.removed = this.removeStaleCacheFiles(activeIds);
+      result.removed = await this.removeStaleCacheFiles(activeIds, current);
     }
     return result;
   }
@@ -1695,6 +1705,7 @@ export class SharedSyncService extends EventEmitter {
   private existingCachePathForRow(sharedId: string): string | null {
     const knownPath = this.cachePaths.get(sharedId);
     if (knownPath && fs.existsSync(knownPath)) return knownPath;
+    if (this.cacheIndexed) return null;
     const root = sharedFilesRoot();
     if (!fs.existsSync(root)) return null;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
@@ -1757,19 +1768,16 @@ export class SharedSyncService extends EventEmitter {
     return conflictPath;
   }
 
-  private removeStaleCacheFiles(activeIds: Set<string> = EMPTY_ACTIVE_SET): number {
-    const root = sharedFilesRoot();
-    if (!fs.existsSync(root)) return 0;
+  private async removeStaleCacheFiles(activeIds: Set<string> = EMPTY_ACTIVE_SET, current = () => !this.disposed): Promise<number> {
     let removed = 0;
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isFile() || !isMarkdownFileName(entry.name)) continue;
-      const filePath = path.join(root, entry.name);
+    for (const [id, filePath] of this.cachePaths) {
+      if (!current()) break;
+      if (activeIds.has(id)) continue;
       try {
-        const parsed = parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'));
-        if (parsed?.sharedId && !activeIds.has(parsed.sharedId)) {
-          fs.rmSync(filePath, { force: true });
-          removed++;
-        }
+        const parsed = parseSharedFileFrontmatter(await fs.promises.readFile(filePath, 'utf-8'));
+        if (parsed?.sharedId !== id || !current()) continue;
+        await this.writeRemoteCache(id, undefined, current);
+        removed++;
       } catch {
         // Leave unreadable files alone.
       }
