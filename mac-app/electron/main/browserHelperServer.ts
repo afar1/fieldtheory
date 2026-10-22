@@ -128,7 +128,13 @@ export type BrowserHelperRendererStorageSnapshot = {
   values: Record<string, string | null>;
 };
 
+export type OnboardingRecordingSource = 'microphone' | 'system-audio' | 'microphone-and-system-audio';
+export type OnboardingAction = 'open-onboarding' | 'open-account' | 'open-permissions' | 'open-transcription' | 'prepare-parakeet' | 'set-recording-source';
+const onboardingActions: readonly string[] = ['open-onboarding', 'open-account', 'open-permissions', 'open-transcription', 'prepare-parakeet', 'set-recording-source'];
+
 export type BrowserHelperNativeBridge = {
+  getOnboardingStatus?: () => unknown | Promise<unknown>;
+  runOnboardingAction?: (action: OnboardingAction, source?: OnboardingRecordingSource) => unknown | Promise<unknown>;
   getLinkRelationChanges?: (request: unknown) => Promise<LinkRelationSnapshot>;
   getAuthSession?: () => unknown | Promise<unknown>;
   getAuthCallsign?: () => string | null | Promise<string | null>;
@@ -625,6 +631,37 @@ export class BrowserHelperServer {
         }
         await this.nativeBridge.setRendererStorage?.(key, value);
         writeJson(res, 200, { ok: true }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'GET' && parsed.pathname === '/native/onboarding/status') {
+        if (!this.nativeBridge.getOnboardingStatus) {
+          writeJson(res, 503, { ok: false, error: 'Setup status is not available yet' }, req.headers.origin);
+          return;
+        }
+        const status = await this.nativeBridge.getOnboardingStatus();
+        writeJson(res, 200, { ok: true, status }, req.headers.origin);
+        return;
+      }
+
+      if (req.method === 'POST' && parsed.pathname === '/native/onboarding/action') {
+        const body = await readJsonBody(req);
+        if (typeof body.action !== 'string' || !onboardingActions.includes(body.action)) {
+          writeJson(res, 400, { ok: false, error: 'Unknown setup action' }, req.headers.origin);
+          return;
+        }
+        if (!this.nativeBridge.runOnboardingAction) {
+          writeJson(res, 503, { ok: false, error: 'Setup actions are not available yet' }, req.headers.origin);
+          return;
+        }
+        if (body.action === 'set-recording-source' && !['microphone', 'system-audio', 'microphone-and-system-audio'].includes(body.source as string)) {
+          writeJson(res, 400, { ok: false, error: 'Choose a supported recording source' }, req.headers.origin);
+          return;
+        }
+        const result = body.action === 'set-recording-source'
+          ? await this.nativeBridge.runOnboardingAction(body.action, body.source as OnboardingRecordingSource)
+          : await this.nativeBridge.runOnboardingAction(body.action as OnboardingAction);
+        writeJson(res, 200, { ok: true, result }, req.headers.origin);
         return;
       }
 

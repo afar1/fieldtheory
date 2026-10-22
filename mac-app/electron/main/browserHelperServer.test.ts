@@ -93,6 +93,49 @@ describe('BrowserHelperServer', () => {
     return { root, address, currentReports };
   }
 
+  it('keeps setup inspection and actions behind local authentication and origin checks', async () => {
+    const runOnboardingAction = vi.fn(() => ({ accepted: true }));
+    const getOnboardingStatus = vi.fn(() => ({
+      schemaVersion: 1,
+      account: { signedIn: true },
+      recording: { source: 'system-audio', hotkey: 'Alt+/', engine: 'parakeet' },
+      parakeet: { runtimeInstalled: true, engines: [{ engine: 'parakeet', verified: true }] },
+      verification: { callAudio: 'not-verified', computerUse: 'host-must-verify' },
+    }));
+    const server = new BrowserHelperServer({
+      service: new BrowserHelperDocumentService([makeTempDir()]),
+      token: 'test-token',
+      nativeBridge: { getOnboardingStatus, runOnboardingAction },
+    });
+    servers.push(server);
+    const address = await server.start();
+    const base = `http://${address.host}:${address.port}/native/onboarding`;
+    const headers = { 'X-FieldTheory-Browser-Token': 'test-token' };
+
+    expect((await request(`${base}/status`)).status).toBe(401);
+    expect((await request(`${base}/status`, { headers: { 'X-FieldTheory-Browser-Token': 'wrong-token' } })).status).toBe(401);
+    expect((await request(`${base}/action`, { method: 'POST', body: { action: 'open-account' } })).status).toBe(401);
+    expect((await request(`${base}/status`, { headers: { ...headers, Origin: 'https://untrusted.example' } })).status).toBe(403);
+    expect(getOnboardingStatus).not.toHaveBeenCalled();
+    expect(runOnboardingAction).not.toHaveBeenCalled();
+
+    const existing = await request(`${base}/status`, { headers });
+    expect(existing.status).toBe(200);
+    expect(existing.body.status.account).toEqual({ signedIn: true });
+    expect(existing.body.status.parakeet.engines[0].verified).toBe(true);
+    expect(existing.body.status.verification.callAudio).toBe('not-verified');
+    expect(runOnboardingAction).not.toHaveBeenCalled();
+    expect((await request(`${base}/action`, { method: 'POST', headers, body: { action: 'run-shell', command: 'anything' } })).status).toBe(400);
+    expect(runOnboardingAction).not.toHaveBeenCalled();
+    expect((await request(`${base}/action`, { method: 'POST', headers, body: { action: 'open-account' } })).body).toEqual({ ok: true, result: { accepted: true } });
+    expect(runOnboardingAction).toHaveBeenCalledWith('open-account');
+    runOnboardingAction.mockClear();
+    expect((await request(`${base}/action`, { method: 'POST', headers, body: { action: 'set-recording-source', source: 'invalid' } })).status).toBe(400);
+    expect(runOnboardingAction).not.toHaveBeenCalled();
+    expect((await request(`${base}/action`, { method: 'POST', headers, body: { action: 'set-recording-source', source: 'microphone-and-system-audio' } })).status).toBe(200);
+    expect(runOnboardingAction).toHaveBeenCalledWith('set-recording-source', 'microphone-and-system-audio');
+  });
+
   it('requires the browser helper token', async () => {
     const { address } = await startServer();
 

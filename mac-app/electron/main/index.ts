@@ -3200,6 +3200,38 @@ async function startBrowserHelperIfEnabled(): Promise<void> {
     },
     staticDir: path.join(app.getAppPath(), 'dist'),
     nativeBridge: {
+      getOnboardingStatus: getAssistedSetupStatus,
+      runOnboardingAction: async (action, source) => {
+        if (action === 'set-recording-source') {
+          if (!transcriberManager || !source) throw new Error('Recording setup is not ready');
+          if (hotMicManager?.isActive) throw new Error('Stop Hot Mic before changing the recording source');
+          await transcriberManager.setRecordingSource(source);
+          return { accepted: true, source: transcriberManager.getRecordingSource() };
+        }
+        if (action === 'prepare-parakeet') {
+          if (!transcriberManager) throw new Error('Transcription is still starting. Try again shortly.');
+          const configured = transcriberManager.getConfiguredTranscriptionEngine();
+          const engine = isParakeetEngine(configured) ? configured : 'parakeet';
+          if (transcriberManager.getParakeetStatus().engines.some(item => item.engine === engine && item.verified)) {
+            return { accepted: true, alreadyPrepared: true };
+          }
+          if (!assistedParakeetPreparing) {
+            assistedParakeetPreparing = true;
+            assistedParakeetError = null;
+            void transcriberManager.setupParakeet(engine).then(result => {
+              assistedParakeetError = result.success ? null : result.error ?? 'Parakeet setup failed';
+            }).catch(error => {
+              assistedParakeetError = error instanceof Error ? error.message : 'Parakeet setup failed';
+            }).finally(() => { assistedParakeetPreparing = false; });
+          }
+          return { accepted: true, preparing: true };
+        }
+        const step = action === 'open-account' ? OnboardingStep.ACCOUNT
+          : action === 'open-transcription' ? OnboardingStep.MODEL
+          : action === 'open-permissions' ? OnboardingStep.PERMISSIONS : undefined;
+        openAssistedOnboarding(step);
+        return { accepted: true };
+      },
       getLinkRelationChanges: (request) => libraryLinkRelationReader.read(request, 'browser'),
       getAuthSession: () => authManager?.getSessionState() ?? null,
       getAuthCallsign: () => getCurrentUserCallsign(),
@@ -7024,6 +7056,46 @@ function setupAppMetadataIPCHandlersOnce(): void {
     return pendingUpdateInfo;
   });
   appMetadataIPCHandlersInstalled = true;
+}
+
+// One setup job per app process. Polling never changes preferences or starts downloads.
+let assistedParakeetPreparing = false;
+let assistedParakeetError: string | null = null;
+
+function openAssistedOnboarding(step?: OnboardingStep): void {
+  setupOnboardingIPCHandlersOnce();
+  setupTranscribeIPCHandlersOnce();
+  onboardingWindow = onboardingWindow ?? createOnboardingWindow();
+  onboardingWindow.show(step ?? preferencesManager?.get().onboardingStep ?? OnboardingStep.PERMISSIONS);
+}
+
+function getAssistedSetupStatus() {
+  const status = transcriberManager?.getParakeetStatus();
+  return {
+    schemaVersion: 1,
+    app: { version: app.getVersion() },
+    account: { signedIn: authManager?.getSessionState()?.authenticated === true },
+    permissions: {
+      microphone: systemPreferences.getMediaAccessStatus('microphone'),
+      screen: systemPreferences.getMediaAccessStatus('screen'),
+      accessibility: systemPreferences.isTrustedAccessibilityClient(false),
+    },
+    recording: {
+      source: transcriberManager?.getRecordingSource() ?? null,
+      hotkey: transcriberManager?.getHotkey() ?? null,
+      engine: transcriberManager?.getConfiguredTranscriptionEngine() ?? null,
+    },
+    parakeet: status ? {
+      runtimeInstalled: status.runtimeInstalled,
+      serverState: status.serverState,
+      activeEngine: status.activeEngine,
+      engines: status.engines.map(({ engine, verified, needsReinstall, lastError, setupError }) => ({
+        engine, verified, needsReinstall, lastError, setupError,
+      })),
+    } : null,
+    setup: { parakeetPreparing: assistedParakeetPreparing, lastError: assistedParakeetError },
+    verification: { callAudio: 'not-verified', computerUse: 'host-must-verify' },
+  };
 }
 
 function showEarlyOnboardingIfNeeded(): boolean {
@@ -15980,6 +16052,11 @@ if (shouldRegisterFieldTheoryProtocol({
 async function handleProtocolUrl(url: string): Promise<void> {
   try {
     const parsed = new URL(url);
+    if (parsed.protocol === 'fieldtheory:' && parsed.host === 'onboard') {
+      await app.whenReady();
+      openAssistedOnboarding();
+      return;
+    }
     const browserLibraryTarget = browserLibraryTargetFromProtocolUrl(parsed);
     if (browserLibraryTarget) {
       if (emitBrowserLibraryNavigationEvent({ type: 'commands:openMarkdownFromLauncher', target: browserLibraryTarget }, { broadcastFallback: false })) {
