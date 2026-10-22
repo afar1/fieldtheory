@@ -15,9 +15,9 @@ From the repository or extracted preview ZIP:
 
 Restart Codex, enable Field Theory under Personal plugins, and start a new chat. The installer changes only Field Theory's personal plugin and its enabled flag. It preserves other config, backs up any replaced version/config, and supports `CODEX_HOME` for isolated testing. It does not publish or install into ChatGPT's official directory.
 
-For an isolated Claude Code session, run `./install.sh --claude` and use the printed `claude --plugin-dir` command. This loads the same skills and local MCP server with Claude's manifest. Claude Cowork ZIP distribution requires a supported **local** session; that host path remains to be tested. Commands in an ordinary cloud VM do not configure the user's Mac.
+For an isolated Claude Code session, run `./install.sh --claude` and use the printed `claude --plugin-dir` command. This loads the same skills and local MCP server with Claude's manifest. For Claude Cowork, use Customize → Plugins → Add → Upload plugin with the preview ZIP, then start a supported **local** session. The package matches the documented upload layout and limits; the Cowork runtime still requires an actual host test. Ordinary Claude Chat ignores local MCP tools. Commands in an ordinary cloud VM do not configure the user's Mac.
 
-If preflight reports missing Node, install the current LTS from [nodejs.org](https://nodejs.org/en/download), then restart the assistant. No silent runtime download occurs. The plugin launcher checks PATH, the user's local bin, and standard Homebrew locations. A fresh Mac still needs this prerequisite; the preview does not claim to be dependency-free.
+If preflight reports missing Node, install the current LTS from [nodejs.org](https://nodejs.org/en/download), then restart the assistant. No silent runtime download occurs. The plugin launcher checks PATH, the user's local bin, an existing Codex dependency runtime, and standard Homebrew locations. It validates the runtime version before use; a bundled runtime is optional and is never assumed to exist. A fresh Mac still needs this prerequisite; the preview does not claim to be dependency-free.
 
 ## Start setup
 
