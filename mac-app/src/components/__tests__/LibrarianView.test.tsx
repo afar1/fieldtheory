@@ -4269,7 +4269,7 @@ describe('LibrarianView render', () => {
       },
     });
 
-    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+    const { container, unmount } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
     const renderedRoot = await waitFor(() => {
       const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
@@ -4285,15 +4285,25 @@ describe('LibrarianView render', () => {
       return input;
     });
     if (!renderedInput) throw new Error('Rendered editor missing');
-    pasteText(renderedInput, '!');
 
-    await waitFor(() => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      pasteText(renderedInput, '!');
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+      expect(window.wikiAPI!.save).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(349); });
+      expect(window.wikiAPI!.save).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
         'quiet save!',
         page.documentVersion,
       );
-    }, { timeout: 1800 });
+    } finally {
+      unmount();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('keeps River sync in the background after a rendered editor save', async () => {
