@@ -300,7 +300,9 @@ export class ModelManager {
     }
 
     return new Promise((resolve, reject) => {
-      https.get(url, (response) => {
+      // Retain proxy and TLS options without sharing sockets between requests.
+      const agent = new https.Agent({ ...https.globalAgent.options, keepAlive: false });
+      https.get(url, { agent }, (response) => {
         // Handle redirects (301, 302, 303, 307, 308)
         const statusCode = response.statusCode || 0;
         if (statusCode >= 300 && statusCode < 400 && response.headers.location) {

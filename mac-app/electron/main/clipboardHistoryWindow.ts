@@ -805,7 +805,7 @@ export class ClipboardHistoryWindow {
     const showInDock = this.shouldUseAppWindow();
 
     if (!showInDock && process.platform === 'darwin') {
-      app.dock.hide();
+      app.dock?.hide();
     }
 
     // If window exists, reposition and show it.
@@ -1323,7 +1323,7 @@ export class ClipboardHistoryWindow {
         this.logLifecycle('hide:window-hidden-app-visible');
       } else {
         if (process.platform === 'darwin') {
-          app.dock.hide();
+          app.dock?.hide();
         }
         app.hide();
         this.logLifecycle('hide:app-hidden');
@@ -1333,7 +1333,7 @@ export class ClipboardHistoryWindow {
       // Immersive mode (alwaysOnTop:false) or dock.bounce() can cause the
       // dock icon to reappear; re-hide it on every window dismiss.
       if (!showInDock && process.platform === 'darwin') {
-        app.dock.hide();
+        app.dock?.hide();
       }
     }
     this.previouslyFocusedWindow = null;

@@ -2670,7 +2670,7 @@ async function getPastedClipboardImagePath(data: DataTransfer): Promise<string |
 
 function getClipboardMarkdownFileReferenceText(data: DataTransfer, pastedText: string): string {
   const filePaths = Array.from(data.files)
-    .map((file) => (file as File & { path?: string }).path)
+    .map((file) => window.clipboardAPI?.getPathForFile?.(file))
     .filter((path): path is string => !!path);
   if (filePaths.length > 0) return filePaths.join('\n');
   const uriList = data.getData('text/uri-list');

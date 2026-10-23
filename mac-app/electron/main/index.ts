@@ -7585,9 +7585,9 @@ async function prepareClipboardWindowStyleTransition(): Promise<void> {
 async function applyClipboardWindowStyleChange(reason: string, restoreSettings: boolean = false): Promise<void> {
   if (process.platform === 'darwin') {
     if (shouldUseClipboardAppWindowMode()) {
-      await app.dock.show();
+      await app.dock?.show();
     } else {
-      app.dock.hide();
+      app.dock?.hide();
     }
   }
 
@@ -14168,7 +14168,7 @@ function broadcastTranscribeEvents(): void {
     if (process.platform === 'darwin' && preferencesManager) {
       const showInDock = shouldUseClipboardAppWindowMode();
       if (showInDock) {
-        app.dock.show();
+        app.dock?.show();
       }
     }
   });
@@ -16960,9 +16960,9 @@ if (!gotTheLock) {
     if (process.platform === 'darwin') {
       const showInDock = shouldUseClipboardAppWindowMode();
       if (showInDock) {
-        await app.dock.show();
+        await app.dock?.show();
       } else {
-        app.dock.hide();
+        app.dock?.hide();
       }
     }
 
