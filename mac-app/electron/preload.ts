@@ -1,7 +1,7 @@
 import type { RiverTeamAction, RiverTeamResult, RiverTeamsState } from './shared/riverTeams';
 import type { LinkRelationRequest, LinkRelationSnapshot } from './shared/libraryLinkRelations';
 import type { VoiceWorkAPI, VoiceWorkState } from './shared/voiceWork';
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 // Define IPC channels locally to avoid import issues
 
@@ -996,6 +996,7 @@ export interface ClipboardAPI {
   restoreItem: (item: ClipboardItem) => Promise<number>;
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
+  getPathForFile: (file: File) => string;
   getClipboardImagePath: () => Promise<string | null>;
   savePastedImageFile: (file: { name?: string | null; type?: string | null; data: Uint8Array }) => Promise<string | null>;
   exportItemImagePath: (id: number) => Promise<string | null>;
@@ -1688,6 +1689,7 @@ const transcribeAPI: TranscribeAPI = {
 };
 
 const clipboardAPI: ClipboardAPI = {
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   queryItems: async (options?: ClipboardQueryOptions): Promise<ClipboardItem[]> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.QUERY_ITEMS, options);
   },

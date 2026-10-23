@@ -32,7 +32,7 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "24.22.1"
           cache: npm
           cache-dependency-path: mac-app/package-lock.json
 
@@ -49,6 +49,10 @@ jobs:
           if [ "$current_branch" = "HEAD" ]; then
             git switch -C "$CI_BRANCH_NAME"
           fi
+        working-directory: .
+
+      - name: Install shared mobile typecheck dependencies
+        run: npm ci --ignore-scripts
         working-directory: .
 
       - name: Install dependencies

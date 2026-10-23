@@ -262,7 +262,7 @@ export class OnboardingWindow {
       if (process.platform === 'darwin' && this.preferencesManager) {
         const windowMode = resolveFieldTheoryWindowMode(this.preferencesManager.get());
         if (windowMode !== 'app') {
-          app.dock.hide();
+          app.dock?.hide();
         }
       }
     });

@@ -513,6 +513,7 @@ interface ClipboardAPI {
 
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
+  getPathForFile?: (file: File) => string;
   getClipboardImagePath?: () => Promise<string | null>;
   savePastedImageFile?: (file: { name?: string | null; type?: string | null; data: Uint8Array }) => Promise<string | null>;
   exportItemImagePath?: (id: number) => Promise<string | null>;

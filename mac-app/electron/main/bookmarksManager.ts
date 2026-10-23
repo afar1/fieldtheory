@@ -544,7 +544,10 @@ async function fetchWebPageHtml(url: string, redirects = 0): Promise<string> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const client = parsed.protocol === 'https:' ? https : http;
+    // Retain proxy options without sharing sockets between requests.
+    const agentOptions = (client.globalAgent as http.Agent & { options: http.AgentOptions }).options;
     const req = client.get(parsed, {
+      agent: new client.Agent({ ...agentOptions, keepAlive: false }),
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; FieldTheory/1.0; +https://fieldtheory.dev)',
         Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
