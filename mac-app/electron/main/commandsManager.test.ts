@@ -90,6 +90,10 @@ describe('CommandsManager default internal commands', () => {
 
   it('discovers a created command through its real filesystem watcher without a rescan', async () => {
     await manager.reinitializeForUser();
+    // FSEvents can deliver the new root's creation after initialization returns.
+    // Observe a real change before measuring incremental discovery.
+    writeFileSync(join(manager.getDefaultDirectory(), 'watcher-ready.md'), '# Watcher ready');
+    await vi.waitFor(() => expect(manager.getCommand('watcher-ready')).not.toBeNull(), { timeout: 2000 });
     const scans = vi.spyOn(manager as any, 'scanDirectory');
     writeFileSync(join(manager.getDefaultDirectory(), 'watcher-created.md'), '# New command');
     await vi.waitFor(() => expect(manager.getCommand('watcher-created')).not.toBeNull(), { timeout: 2000 });

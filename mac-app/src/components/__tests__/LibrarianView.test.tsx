@@ -5811,13 +5811,15 @@ describe('LibrarianView render', () => {
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
     const firstItem = await screen.findByText('keyboard-multi-archive-a');
+    const firstRow = firstItem.closest<HTMLElement>('[data-library-sidebar-row-id]')!;
+    const secondRow = screen.getByText('keyboard-multi-archive-b').closest<HTMLElement>('[data-library-sidebar-row-id]')!;
     fireEvent.mouseDown(firstItem);
     fireEvent.click(firstItem);
 
     fireEvent.keyDown(window, { key: 'x' });
 
-    const firstSelectedMarker = await screen.findByRole('button', { name: 'Deselect keyboard-multi-archive-a' });
-    const secondUnselectedMarker = screen.getByRole('button', { name: 'Select keyboard-multi-archive-b' });
+    const firstSelectedMarker = await within(firstRow).findByRole('button', { name: 'Deselect keyboard-multi-archive-a' });
+    const secondUnselectedMarker = within(secondRow).getByRole('button', { name: 'Select keyboard-multi-archive-b' });
     expect(firstSelectedMarker.getAttribute('aria-pressed')).toBe('true');
     expect(secondUnselectedMarker.getAttribute('aria-pressed')).toBe('false');
 
@@ -5825,7 +5827,7 @@ describe('LibrarianView render', () => {
     fireEvent.keyDown(window, { key: 'x' });
 
     await waitFor(() => {
-      const secondSelectedMarker = screen.getByRole('button', { name: 'Deselect keyboard-multi-archive-b' });
+      const secondSelectedMarker = within(secondRow).getByRole('button', { name: 'Deselect keyboard-multi-archive-b' });
       expect(secondSelectedMarker.getAttribute('aria-pressed')).toBe('true');
     });
 
@@ -5849,9 +5851,12 @@ describe('LibrarianView render', () => {
     });
 
     fireEvent.click(await screen.findByText('Archive (2)'));
-    expect(await screen.findByText('keyboard-multi-archive-a')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-a' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Deselect keyboard-multi-archive-b' })).toBeNull();
+    const archivedFirstItem = await screen.findByText('keyboard-multi-archive-a');
+    expect(archivedFirstItem).toBeTruthy();
+    const archivedFirstRow = archivedFirstItem.closest<HTMLElement>('[data-library-sidebar-row-id]')!;
+    const archivedSecondRow = screen.getByText('keyboard-multi-archive-b').closest<HTMLElement>('[data-library-sidebar-row-id]')!;
+    expect(within(archivedFirstRow).queryByRole('button', { name: 'Deselect keyboard-multi-archive-a' })).toBeNull();
+    expect(within(archivedSecondRow).queryByRole('button', { name: 'Deselect keyboard-multi-archive-b' })).toBeNull();
   }, LIBRARIAN_VIEW_TEST_TIMEOUT_MS);
 
   it('stops sidebar keyboard navigation at visible list boundaries', async () => {
