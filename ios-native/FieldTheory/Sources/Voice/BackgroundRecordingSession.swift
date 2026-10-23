@@ -22,6 +22,30 @@ final class BackgroundRecordingSession {
     private let logger = Logger(subsystem: "com.afar1.fieldtheory", category: "BackgroundRecording")
 
     func start() async throws {
+        do {
+            try await startCapture()
+        } catch {
+            // Capture failures before AVAudioSession starts (storage, activity,
+            // permission) must survive the next successful Action-button tap.
+            let failure = error as NSError
+            let diagnostic: [String: Any] = [
+                "timestamp": Date().timeIntervalSince1970,
+                "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+                "stage": "action-button-start", "errorDomain": failure.domain,
+                "errorCode": failure.code, "message": error.localizedDescription
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys]) {
+                let directory = RecorderController.voiceDiagnosticsDir
+                Task.detached(priority: .utility) {
+                    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try? data.write(to: directory.appendingPathComponent("action-button-start-failure.json"), options: .atomic)
+                }
+            }
+            throw error
+        }
+    }
+
+    private func startCapture() async throws {
         guard !starting else { return }
         starting = true
         defer { starting = false }

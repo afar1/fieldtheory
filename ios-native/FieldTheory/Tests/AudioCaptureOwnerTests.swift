@@ -8,6 +8,7 @@ private final class FakeCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
     var onStop: (() -> Void)?
     var stopGate: DispatchSemaphore?
     var startError: Error?
+    var startErrors: [Error] = []
     var configureError: Error?
     var configureErrors: [Error] = []
     private(set) var startCalls = 0
@@ -42,6 +43,7 @@ private final class FakeCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
         XCTAssertFalse(Thread.isMainThread, "Recorder startup must not block UI rendering")
         startCalls += 1
         onStart?()
+        if !startErrors.isEmpty { throw startErrors.removeFirst() }
         if let startError { throw startError }
         if refuseFirstStart && startCalls == 1 { throw MicrophoneStartError.notStarted }
         currentURL = url
@@ -63,6 +65,22 @@ private final class FakeCaptureDevice: AudioCaptureDevice, @unchecked Sendable {
 }
 
 final class AudioCaptureOwnerTests: XCTestCase {
+    func testTransientStartAfterActivationReacquiresSessionAndRecordsOnce() async throws {
+        let device = FakeCaptureDevice()
+        device.startErrors = [NSError(domain: NSOSStatusErrorDomain,
+            code: AVAudioSession.ErrorCode.cannotStartRecording.rawValue)]
+        let owner = AudioCaptureOwner(makeDevice: { device })
+        let token = UUID()
+        let started = try await owner.start(token: token, sessionID: 930_001, mixWithOtherAudio: true)
+        XCTAssertEqual(device.configureCalls, 2, "A failed route must be reacquired before retry")
+        XCTAssertEqual(device.deactivateCalls, 1)
+        XCTAssertEqual(started.files.count, 1, "Only the successful attempt belongs to the recording")
+        let sample = await owner.sample(token: token)
+        XCTAssertEqual(sample?.isRecording, true)
+        let files = await owner.stop(token: token)
+        for file in files { try? FileManager.default.removeItem(at: file) }
+    }
+
     func testOrderedPolicyChangeRestagesBeforeImmediateStart() async throws {
         let device = FakeCaptureDevice()
         let owner = AudioCaptureOwner(makeDevice: { device })

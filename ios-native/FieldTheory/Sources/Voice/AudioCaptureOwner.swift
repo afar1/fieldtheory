@@ -138,11 +138,15 @@ actor AudioCaptureOwner {
                                               AVAudioSession.ErrorCode.resourceNotAvailable.rawValue,
                                               AVAudioSession.ErrorCode.cannotStartRecording.rawValue,
                                               AVAudioSession.ErrorCode.cannotStartPlaying.rawValue]
-                        retryable = !sessionConfigured && failure.domain == NSOSStatusErrorDomain
+                        retryable = failure.domain == NSOSStatusErrorDomain
                             && transientCodes.contains(failure.code)
                     }
                     guard retryable, attempt < delays.count else { throw error }
-                    if !sessionConfigured { device.deactivate() }
+                    // A retry must reacquire the audio session, not repeat a
+                    // failed start against a stale route after suspension.
+                    device.stop()
+                    device.deactivate()
+                    sessionConfigured = false
                     trace?.mark("audio.retry-wait")
                     try await Task.sleep(for: delays[attempt])
                 }
